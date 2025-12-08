@@ -32,7 +32,7 @@ def init_db():
     """
     con = duckdb.connect(database=str(DB_PATH))
     con.execute("""
-        CREATE TABLE IF NOT EXISTS financial_data (
+        CREATE TABLE IF NOT EXISTS raw_prices (
             ticker VARCHAR,
             date DATE,
             adj_close DOUBLE,
@@ -95,3 +95,33 @@ def fetch_data():
                                 int(row['Volume']) if 'Volume' in row and pd.notna(row['Volume']) else None))
                 
     return records
+
+def store_data(records):
+    """
+    Docstring for store_data
+    """
+    if not records:
+        logging.info("No records to store.")
+        return
+
+    con = duckdb.connect(database=str(DB_PATH))
+    
+    con.execute("CREATE TEMPORARY TABLE temp_prices AS SELECT * FROM raw_prices WHERE 1=0")
+    con.executemany("INSERT INTO temp_prices VALUES (?, ?, ?, ?)", records)
+    
+    con.execute("""
+        INSERT INTO raw_prices 
+        SELECT * FROM temp_prices
+        ON CONFLICT (date, ticker) DO UPDATE 
+        SET adj_close = excluded.adj_close, volume = excluded.volume
+    """)
+
+    count = con.execute("SELECT COUNT(*) FROM raw_prices").fetchone()[0]
+    con.close()
+    logging.info(f"Stored {count} records into the database.")
+
+if __name__ == "__main__":
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    init_db()
+    records = fetch_data()
+    store_data(records)
