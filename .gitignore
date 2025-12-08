@@ -1,0 +1,44 @@
+__pycache__/
+.venv/
+env/
+
+.ipynb_checkpoints/
+*.pyc
+
+.vscode/
+*.swp
+
+.DS_Store
+Thumbs.db
+
+# Data:
+/data/raw/*
+/data/processed/*
+/data/db/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/db/.gitkeep
+
+# Models:
+models/*.pth
+models/*.pt
+models/*.pkl
+models/*.h5
+models/*.onnx
+!models/.gitkeep
+
+# Logs:
+*.log
+logs/
+
+# Testing
+.coverage
+.tox/
+.nox/
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+
+# Conf
+.env
+config.yaml
