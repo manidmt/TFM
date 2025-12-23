@@ -14,6 +14,7 @@ import duckdb
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
+import os
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -47,7 +48,7 @@ def get_last_date():
     Docstring for get_last_date
     """
     con = duckdb.connect(database=str(DB_PATH))
-    result = con.execute("SELECT MAX(date) FROM financial_data").fetchone()
+    result = con.execute("SELECT MAX(date) FROM raw_prices").fetchone()
     con.close()
     return result[0] if result[0] else None
 
@@ -62,7 +63,7 @@ def fetch_data():
         logging.info(f"Fetching data from {start_date} onwards.")
         period = None
     else:
-        start_date = "2000-01-01"
+        start_date = "2010-01-01"
         logging.info("No existing data found. Fetching all available data.")
 
     tickers = " ".join(ASSETS.values())
@@ -103,7 +104,8 @@ def store_data(records):
     if not records:
         logging.info("No records to store.")
         return
-
+    logging.info(f"CWD: {os.getcwd()}")
+    logging.info(f"DB_PATH abs: {DB_PATH.resolve()}")
     con = duckdb.connect(database=str(DB_PATH))
     
     con.execute("CREATE TEMPORARY TABLE temp_prices AS SELECT * FROM raw_prices WHERE 1=0")
