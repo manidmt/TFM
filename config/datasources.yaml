@@ -1,0 +1,25 @@
+db:
+  path: data/db/financial_data.duckdb
+
+prices:
+  tickers:
+    - "^GSPC"
+    - "BTC-USD"
+    - "TLT"
+  default_start: "2010-01-01"
+  auto_adjust: true
+  lookback_buffer_days: 5
+
+macro:
+  default_start: "2010-01-01"
+  lookback_buffer_days: 10
+  fred_series:
+    VIXCLS: vix
+    WALCL: fed_assets
+    WTREGEN: tga
+    RRPONTSYD: rrp
+    M2SL: m2
+    DFF: ffr
+    SOFR: sofr
+  yahoo:
+    dxy_ticker: "^DXY

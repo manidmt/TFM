@@ -1,0 +1,18 @@
+calendar:
+  freq: "B" # Business day frequency
+  timezone: "UTC"
+
+targets:
+  horizons: [5, 20]
+  regime_bins: 3
+  regime_method: "quantile"
+
+features:
+  returns:
+    type: "log"
+    lags: [1, 5, 20]
+  realized_vol:
+    window_sizes: [5, 20]
+  macro_transforms:
+    method: "diff"
+    lags: [1, 5, 20]
