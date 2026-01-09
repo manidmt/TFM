@@ -8,122 +8,152 @@
 @description: Module to fetch financial data from various sources.
 '''
 
-import yfinance as yf
-import pandas as pd
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
+from typing import Iterable, Optional
+
 import duckdb
-import logging
-from datetime import datetime, timedelta
-from pathlib import Path
-import os
+import pandas as pd
+import yfinance as yf
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-ASSETS = {
-    'Stocks': '^GSPC',  # S&P 500
-    'Crypto': 'BTC-USD',  # Bitcoin
-    'Bonds': 'TLT',  # iShares 20+ Year Treasury Bond ETF
-    'Volatility': '^VIX'  # CBOE Volatility Index
-}
+@dataclass(frozen=True)
+class PriceIngestConfig:
+    db_path: str
+    table: str = "raw_prices"
+    lookback_buffer_days: int = 5
+    default_start: str = "2010-01-01"
+    auto_adjust: bool = True
 
-DB_PATH = Path("data/db/financial_data.duckdb")
 
-def init_db():
-    """
-    Docstring for init_db
-    """
-    con = duckdb.connect(database=str(DB_PATH))
-    con.execute("""
-        CREATE TABLE IF NOT EXISTS raw_prices (
-            ticker VARCHAR,
-            date DATE,
-            adj_close DOUBLE,
+def connect(db_path: str) -> duckdb.DuckDBPyConnection:
+    return duckdb.connect(db_path)
+
+
+def init_schema(con: duckdb.DuckDBPyConnection, table: str) -> None:
+    con.execute(f"""
+        CREATE TABLE IF NOT EXISTS {table} (
+            ticker TEXT NOT NULL,
+            date DATE NOT NULL,
+            open DOUBLE,
+            high DOUBLE,
+            low DOUBLE,
+            close DOUBLE,
             volume BIGINT,
+            source TEXT,
+            inserted_at TIMESTAMP,
             PRIMARY KEY (ticker, date)
-        )
+        );
     """)
-    con.close()
 
-def get_last_date():
+
+def get_last_dates(con: duckdb.DuckDBPyConnection, table: str) -> dict[str, date]:
     """
-    Docstring for get_last_date
+    Returns last available date per ticker present in DB.
     """
-    con = duckdb.connect(database=str(DB_PATH))
-    result = con.execute("SELECT MAX(date) FROM raw_prices").fetchone()
-    con.close()
-    return result[0] if result[0] else None
+    rows = con.execute(f"SELECT ticker, MAX(date) AS last_date FROM {table} GROUP BY ticker").fetchall()
+    out: dict[str, date] = {}
+    for t, d in rows:
+        if d is not None:
+            out[str(t)] = d
+    return out
 
-def fetch_data():
+
+def download_ohlcv(tickers: Iterable[str], start: str, end: Optional[str], auto_adjust: bool) -> pd.DataFrame:
     """
-    Docstring for fetch_data
+    Download OHLCV for tickers using yfinance.
+    Returns a DataFrame with columns: ticker, date, open, high, low, close, volume
     """
-    last_date = get_last_date()
-    
-    if last_date:
-        start_date = (last_date - timedelta(days=2)).strftime('%Y-%m-%d')
-        logging.info(f"Fetching data from {start_date} onwards.")
-        period = None
-    else:
-        start_date = "2010-01-01"
-        logging.info("No existing data found. Fetching all available data.")
+    df = yf.download(
+        list(tickers),
+        start=start,
+        end=end,
+        group_by="ticker",
+        auto_adjust=auto_adjust,
+        progress=False,
+        threads=True,
+    )
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["ticker", "date", "open", "high", "low", "close", "volume"])
 
-    tickers = " ".join(ASSETS.values())
-
-    if start_date:
-        data = yf.download(tickers, start=start_date, group_by='ticker', auto_adjust=True, progress=False)
-    else:
-        data = yf.download(tickers, period='max', group_by='ticker', auto_adjust=True, progress=False)
-
-    if data.empty:
-        logging.info("No new data fetched.")
-        return
-    
     records = []
-
-    for asset_name, ticker in ASSETS.items():
-        if len(ASSETS) > 1:
-            if ticker not in data.columns.levels[0]:
-                logging.warning(f"No data found for {ticker}. Skipping.")
+    if isinstance(df.columns, pd.MultiIndex):
+        for t in df.columns.levels[0]:
+            if t not in df.columns.get_level_values(0):
                 continue
-            df = data[ticker].copy()
-        else:
-            df = data.copy()
+            sub = df[t].copy()
+            if sub.empty:
+                continue
+            sub = sub.rename(columns={
+                "Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume"
+            })
+            sub["ticker"] = t
+            sub = sub.reset_index().rename(columns={"Date": "date"})
+            records.append(sub[["ticker", "date", "open", "high", "low", "close", "volume"]])
+        out = pd.concat(records, ignore_index=True) if records else pd.DataFrame()
+    else:
+        sub = df.copy().rename(columns={
+            "Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume"
+        })
+        sub = sub.reset_index().rename(columns={"Date": "date"})
+        out = sub.assign(ticker=list(tickers)[0])[["ticker", "date", "open", "high", "low", "close", "volume"]]
 
-        df = df.reset_index()
+    out["date"] = pd.to_datetime(out["date"]).dt.date
+    return out.dropna(subset=["date"]).sort_values(["ticker", "date"])
 
-        for _, row in df.iterrows():
-            if pd.notna(row['Close']):
-                records.append((ticker, row['Date'].date(), row['Close'], 
-                                int(row['Volume']) if 'Volume' in row and pd.notna(row['Volume']) else None))
-                
-    return records
 
-def store_data(records):
-    """
-    Docstring for store_data
-    """
-    if not records:
-        logging.info("No records to store.")
-        return
-    logging.info(f"CWD: {os.getcwd()}")
-    logging.info(f"DB_PATH abs: {DB_PATH.resolve()}")
-    con = duckdb.connect(database=str(DB_PATH))
-    
-    con.execute("CREATE TEMPORARY TABLE temp_prices AS SELECT * FROM raw_prices WHERE 1=0")
-    con.executemany("INSERT INTO temp_prices VALUES (?, ?, ?, ?)", records)
-    
-    con.execute("""
-        INSERT INTO raw_prices 
-        SELECT * FROM temp_prices
-        ON CONFLICT (date, ticker) DO UPDATE 
-        SET adj_close = excluded.adj_close, volume = excluded.volume
+def upsert_prices(con: duckdb.DuckDBPyConnection, table: str, df: pd.DataFrame, source: str = "yfinance") -> int:
+    if df.empty:
+        return 0
+
+    df2 = df.copy()
+    df2["source"] = source
+    df2["inserted_at"] = datetime.now(timezone.utc)
+
+    con.register("tmp_prices", df2)
+
+    con.execute(f"""
+        INSERT INTO {table} (ticker, date, open, high, low, close, volume, source, inserted_at)
+        SELECT ticker, date, open, high, low, close, volume, source, inserted_at
+        FROM tmp_prices
+        ON CONFLICT (ticker, date) DO UPDATE SET
+            open = excluded.open,
+            high = excluded.high,
+            low  = excluded.low,
+            close = excluded.close,
+            volume = excluded.volume,
+            source = excluded.source,
+            inserted_at = excluded.inserted_at
     """)
+    return len(df2)
 
-    count = con.execute("SELECT COUNT(*) FROM raw_prices").fetchone()[0]
-    con.close()
-    logging.info(f"Stored {count} records into the database.")
 
-if __name__ == "__main__":
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    init_db()
-    records = fetch_data()
-    store_data(records)
+def refresh_prices(cfg: PriceIngestConfig, tickers: list[str], end: Optional[str] = None) -> dict:
+    con = connect(cfg.db_path)
+    try:
+        init_schema(con, cfg.table)
+
+        last = get_last_dates(con, cfg.table)
+        today = date.today()
+
+        inserted = 0
+        errors: dict[str, str] = {}
+
+        for t in tickers:
+            last_date = last.get(t)
+            if last_date:
+                start_date = (last_date - timedelta(days=cfg.lookback_buffer_days)).isoformat()
+            else:
+                start_date = cfg.default_start
+
+            try:
+                df = download_ohlcv([t], start=start_date, end=end, auto_adjust=cfg.auto_adjust)
+                inserted += upsert_prices(con, cfg.table, df, source="yfinance")
+            except Exception as e:
+                errors[t] = str(e)
+
+        return {"inserted_rows": inserted, "errors": errors, "as_of": today.isoformat()}
+    finally:
+        con.close()

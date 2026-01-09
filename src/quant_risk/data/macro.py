@@ -8,199 +8,188 @@
 @description: Module to fetch financial macroeconomic data from various sources.
 '''
 
-import pandas_datareader.data as web
-import yfinance as yf
-import pandas as pd
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
+from typing import Optional
+
 import duckdb
-import logging
-from datetime import datetime, timedelta
-from pathlib import Path
-import os
+import pandas as pd
+from pandas_datareader import data as web  # FRED
+import yfinance as yf
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-MACRO_TICKERS = {
-    'M2_US': 'M2SL',
-    'FED_ASSETS': 'WALCL',
-    'US_10Y_YIELD': 'DGS10',
-    'YIELD_CURVE': 'T10Y2Y',
-    'TGA': 'WTREGEN',
-    'RRP': 'RRPONTSYD',
-    'CREDIT_SPREAD': 'BAMLC0A0CM'
+@dataclass(frozen=True)
+class MacroIngestConfig:
+    db_path: str
+    table: str = "macro_features"
+    default_start: str = "2010-01-01"
+    lookback_buffer_days: int = 10
+
+
+FRED_SERIES = {
+    "VIXCLS": "vix",
+    "WALCL": "fed_assets",
+    "WTREGEN": "tga",
+    "RRPONTSYD": "rrp",
+    "M2SL": "m2",
+    "DFF": "ffr",
+    "SOFR": "sofr",
 }
 
-DB_PATH = Path("data/db/financial_data.duckdb")
 
-def init_db():
-    """
-    Docstring for init_db
-    """
-    con = duckdb.connect(database=str(DB_PATH))
-    con.execute("DROP TABLE IF EXISTS macro_features")
-    con.execute("""
-        CREATE TABLE macro_features (
-            date DATE PRIMARY KEY,
-            M2_US DOUBLE,
-            FED_ASSETS DOUBLE,
-            TGA DOUBLE,
-            RRP DOUBLE,
-            NET_LIQUIDITY DOUBLE,
-            CREDIT_SPREAD DOUBLE,
-            US_10Y_YIELD DOUBLE,
-            YIELD_CURVE DOUBLE,
-            DXY_CLOSE DOUBLE
-        )
+def connect(db_path: str) -> duckdb.DuckDBPyConnection:
+    return duckdb.connect(db_path)
+
+
+def init_schema(con: duckdb.DuckDBPyConnection, table: str) -> None:
+    con.execute(f"""
+        CREATE TABLE IF NOT EXISTS {table} (
+            date DATE NOT NULL,
+            vix DOUBLE,
+            fed_assets DOUBLE,
+            tga DOUBLE,
+            rrp DOUBLE,
+            m2 DOUBLE,
+            ffr DOUBLE,
+            sofr DOUBLE,
+            dxy DOUBLE,
+            net_liquidity DOUBLE,
+            source TEXT,
+            inserted_at TIMESTAMP,
+            PRIMARY KEY (date)
+        );
     """)
-    con.close()
 
-def get_last_date():
-    """
-    Docstring for get_last_date
-    """
-    con = duckdb.connect(database=str(DB_PATH))
-    try:
-        result = con.execute("SELECT MAX(date) FROM macro_features").fetchone()
-        last_date = result[0] if result else None
-    except duckdb.CatalogException:
-        last_date = None
-    con.close()
-    return last_date
 
-def fetch_fred_data(start_date):
-    """
-    Docstring for fetch_fred_data
-    """
-    logging.info(f"Fetching FRED data on {start_date}")
-    try:
-        df = web.DataReader(list(MACRO_TICKERS.values()), 'fred', start_date, pd.Timestamp.now())
-        df.rename(columns={v: k for k, v in MACRO_TICKERS.items()}, inplace=True)
-        return df
-    except Exception as e:
-        logging.error(f"Error fetching FRED data: {e}")
+def get_last_date(con: duckdb.DuckDBPyConnection, table: str) -> Optional[date]:
+    row = con.execute(f"SELECT MAX(date) FROM {table}").fetchone()
+    return row[0] if row and row[0] is not None else None
+
+
+def fetch_fred(start: str, end: Optional[str]) -> pd.DataFrame:
+    df = web.DataReader(list(FRED_SERIES.keys()), "fred", start, end)
+    if df is None or df.empty:
         return pd.DataFrame()
-    
 
-def fetch_dxy_data(start_date):
-    """
-    Docstring for fetch_dxy_data
-    """
-    logging.info(f"Fetching DXY data on {start_date}")
-    dxy = yf.download('DX-Y.NYB', start=start_date, auto_adjust=True, progress=False)
-    if dxy.empty:
-        logging.warning("No DXY data fetched.")
-        return pd.DataFrame()
-    if isinstance(dxy.index, pd.MultiIndex):
-        dxy.columns = dxy.columns.get_level_values(0)
-    
-    df = pd.DataFrame()
-    if 'Close' in dxy.columns:
-        df['DXY_CLOSE'] = dxy['Close']
-    else:
-        df['DXY_CLOSE'] = dxy.iloc[:, 0]
-        
+    df = df.rename(columns=FRED_SERIES).reset_index().rename(columns={"DATE": "date"})
+    df["date"] = pd.to_datetime(df["date"]).dt.date
     return df
 
-def process_and_merge(df_fred, df_dxy):
-    """
-    Docstring for process_and_merge
-    """
-    if df_fred.empty or df_dxy.empty:
-        logging.info("No data to process.")
+
+def fetch_dxy(start: str, end: Optional[str]) -> pd.DataFrame:
+    df = yf.download("^DXY", start=start, end=end, auto_adjust=True, progress=False)
+    if df is None or df.empty:
         return pd.DataFrame()
 
-    df_total = df_fred.join(df_dxy, how='outer')
-    all_days = pd.date_range(start=df_total.index.min(), end=df_total.index.max(), freq='D')
-    df_total = df_total.reindex(all_days)
+    out = df.reset_index().rename(columns={"Date": "date"})
+    out["date"] = pd.to_datetime(out["date"]).dt.date
+    out = out.rename(columns={"Close": "dxy"})
+    return out[["date", "dxy"]]
 
-    df_total = df_total.ffill()
 
-    df_total = df_total.dropna()
+def compute_features(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
 
-    # Net Liquidity = Fed Assets - TGA - RRP
-    fed_assets = df_total['FED_ASSETS']
-    tga = df_total['TGA'] * 1000
-    rrp = df_total['RRP'] * 1000        
-    
-    df_total['NET_LIQUIDITY'] = fed_assets - tga - rrp
-    
-    logging.info("Calculated NET_LIQUIDITY (Fed - TGA - RRP)")
-    
-    df_total.index.name = 'date'
-    df_final = df_total.reset_index()
-    df_final['date'] = pd.to_datetime(df_final['date']).dt.date
-    return df_final
+    # Example: net_liquidity = fed_assets - tga - rrp
+    # Note: in FRED, WALCL usually in "millions of dollars" (depends on series),
+    # and tga and rrp may be in different units.
+    if {"fed_assets", "tga", "rrp"}.issubset(df.columns):
+        df["net_liquidity"] = df["fed_assets"] - df["tga"] - df["rrp"]
 
-def store_data(df):
-    """
-    Docstring for store_data
-    """
-    if df.empty:
-        logging.info("No data to store.")
-        return
+    return df
 
-    con = duckdb.connect(database=str(DB_PATH))
-    expected_cols = [
-        'date', 'M2_US', 'FED_ASSETS', 'TGA', 'RRP', 
-        'NET_LIQUIDITY', 'CREDIT_SPREAD', 'US_10Y_YIELD', 
-        'YIELD_CURVE', 'DXY_CLOSE'
-    ]
 
-    try:
-        df_sorted = df[expected_cols].copy()
-    except KeyError as e:
-        logging.error(f"Missing columns in DataFrame: {e}")
-        logging.error(f"Available columns: {df.columns.tolist()}")
-        con.close()
-        return
-
-    con.execute("CREATE TEMPORARY TABLE temp_macro AS SELECT * FROM macro_features WHERE 1=0")
-    
-    con.register("df_sorted", df_sorted)
-    con.execute("INSERT INTO temp_macro SELECT * FROM df_sorted")
-    con.execute("""
-        INSERT INTO macro_features 
-        SELECT * FROM temp_macro
-        ON CONFLICT (date) DO UPDATE 
-        SET M2_US = excluded.M2_US,
-            FED_ASSETS = excluded.FED_ASSETS,
-            TGA = excluded.TGA,
-            RRP = excluded.RRP,
-            NET_LIQUIDITY = excluded.NET_LIQUIDITY,
-            CREDIT_SPREAD = excluded.CREDIT_SPREAD,
-            US_10Y_YIELD = excluded.US_10Y_YIELD,
-            YIELD_CURVE = excluded.YIELD_CURVE,
-            DXY_CLOSE = excluded.DXY_CLOSE
-    """)
-    
-    count = con.execute("SELECT COUNT(*) FROM macro_features").fetchone()[0]
-    con.close()
-    logging.info(f"Stored macro data. Total records: {count}")
-
-def run():
-    logging.info(f"CWD: {os.getcwd()}")
-    logging.info(f"DB_PATH abs: {DB_PATH.resolve()}")
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    init_db()
-    
-    last_date = get_last_date()
-    
-    if last_date:
-        start_date = (last_date - timedelta(days=5)).strftime('%Y-%m-%d')
-        logging.info(f"Incremental update from {start_date}")
-    else:
-        start_date = "2010-01-01"
-        logging.info("Initial Full Load")
-
-    df_fred = fetch_fred_data(start_date)
-    df_dxy = fetch_dxy_data(start_date)
-    
+def merge_sources(df_fred: pd.DataFrame, df_dxy: pd.DataFrame) -> pd.DataFrame:
     if df_fred.empty and df_dxy.empty:
-        logging.warning("No data found.")
-        return
+        return pd.DataFrame()
 
-    df_final = process_and_merge(df_fred, df_dxy)
-    
-    store_data(df_final)
+    if df_fred.empty:
+        df = df_dxy.copy()
+    elif df_dxy.empty:
+        df = df_fred.copy()
+    else:
+        df = df_fred.merge(df_dxy, on="date", how="outer")
 
-if __name__ == "__main__":
-    run()
+    df = df.sort_values("date")
+
+    idx = pd.date_range(df["date"].min(), df["date"].max(), freq="D")
+    df = df.set_index(pd.to_datetime(df["date"]))
+    df = df.reindex(idx).ffill()
+    df.index.name = "date"
+    df = df.reset_index()
+    df["date"] = pd.to_datetime(df["date"]).dt.date
+
+    df = compute_features(df)
+    return df
+
+
+def upsert_macro(con: duckdb.DuckDBPyConnection, table: str, df: pd.DataFrame, source: str) -> int:
+    if df.empty:
+        return 0
+
+    cols = [
+        "date", "vix", "fed_assets", "tga", "rrp", "m2", "ffr", "sofr", "dxy", "net_liquidity"
+    ]
+    for c in cols:
+        if c not in df.columns:
+            df[c] = pd.NA
+
+    df2 = df[cols].copy()
+    df2["source"] = source
+    df2["inserted_at"] = datetime.utcnow()
+
+    con.register("tmp_macro", df2)
+
+    con.execute(f"""
+        INSERT INTO {table} (date, vix, fed_assets, tga, rrp, m2, ffr, sofr, dxy, net_liquidity, source, inserted_at)
+        SELECT date, vix, fed_assets, tga, rrp, m2, ffr, sofr, dxy, net_liquidity, source, inserted_at
+        FROM tmp_macro
+        ON CONFLICT (date) DO UPDATE SET
+            vix = excluded.vix,
+            fed_assets = excluded.fed_assets,
+            tga = excluded.tga,
+            rrp = excluded.rrp,
+            m2 = excluded.m2,
+            ffr = excluded.ffr,
+            sofr = excluded.sofr,
+            dxy = excluded.dxy,
+            net_liquidity = excluded.net_liquidity,
+            source = excluded.source,
+            inserted_at = excluded.inserted_at
+    """)
+    return len(df2)
+
+
+def refresh_macro(cfg: MacroIngestConfig, end: Optional[str] = None) -> dict:
+    con = connect(cfg.db_path)
+    try:
+        init_schema(con, cfg.table)
+
+        last = get_last_date(con, cfg.table)
+        if last:
+            start = (last - timedelta(days=cfg.lookback_buffer_days)).isoformat()
+        else:
+            start = cfg.default_start
+
+        df_fred = pd.DataFrame()
+        df_dxy = pd.DataFrame()
+        errors = {}
+
+        try:
+            df_fred = fetch_fred(start=start, end=end)
+        except Exception as e:
+            errors["fred"] = str(e)
+
+        try:
+            df_dxy = fetch_dxy(start=start, end=end)
+        except Exception as e:
+            errors["dxy"] = str(e)
+
+        df = merge_sources(df_fred, df_dxy)
+        inserted = upsert_macro(con, cfg.table, df, source="fred+yfinance")
+
+        return {"inserted_rows": inserted, "errors": errors, "start": start, "end": end}
+    finally:
+        con.close()
