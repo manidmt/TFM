@@ -54,7 +54,6 @@ def init_schema(con: duckdb.DuckDBPyConnection, table: str) -> None:
             m2 DOUBLE,
             ffr DOUBLE,
             sofr DOUBLE,
-            dxy DOUBLE,
             net_liquidity DOUBLE,
             source TEXT,
             inserted_at TIMESTAMP,
@@ -78,17 +77,6 @@ def fetch_fred(start: str, end: Optional[str]) -> pd.DataFrame:
     return df
 
 
-def fetch_dxy(start: str, end: Optional[str]) -> pd.DataFrame:
-    df = yf.download("^DXY", start=start, end=end, auto_adjust=True, progress=False)
-    if df is None or df.empty:
-        return pd.DataFrame()
-
-    out = df.reset_index().rename(columns={"Date": "date"})
-    out["date"] = pd.to_datetime(out["date"]).dt.date
-    out = out.rename(columns={"Close": "dxy"})
-    return out[["date", "dxy"]]
-
-
 def compute_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
@@ -101,36 +89,12 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def merge_sources(df_fred: pd.DataFrame, df_dxy: pd.DataFrame) -> pd.DataFrame:
-    if df_fred.empty and df_dxy.empty:
-        return pd.DataFrame()
-
-    if df_fred.empty:
-        df = df_dxy.copy()
-    elif df_dxy.empty:
-        df = df_fred.copy()
-    else:
-        df = df_fred.merge(df_dxy, on="date", how="outer")
-
-    df = df.sort_values("date")
-
-    idx = pd.date_range(df["date"].min(), df["date"].max(), freq="D")
-    df = df.set_index(pd.to_datetime(df["date"]))
-    df = df.reindex(idx).ffill()
-    df.index.name = "date"
-    df = df.reset_index()
-    df["date"] = pd.to_datetime(df["date"]).dt.date
-
-    df = compute_features(df)
-    return df
-
-
 def upsert_macro(con: duckdb.DuckDBPyConnection, table: str, df: pd.DataFrame, source: str) -> int:
     if df.empty:
         return 0
 
     cols = [
-        "date", "vix", "fed_assets", "tga", "rrp", "m2", "ffr", "sofr", "dxy", "net_liquidity"
+        "date", "vix", "fed_assets", "tga", "rrp", "m2", "ffr", "sofr", "net_liquidity"
     ]
     for c in cols:
         if c not in df.columns:
@@ -143,8 +107,8 @@ def upsert_macro(con: duckdb.DuckDBPyConnection, table: str, df: pd.DataFrame, s
     con.register("tmp_macro", df2)
 
     con.execute(f"""
-        INSERT INTO {table} (date, vix, fed_assets, tga, rrp, m2, ffr, sofr, dxy, net_liquidity, source, inserted_at)
-        SELECT date, vix, fed_assets, tga, rrp, m2, ffr, sofr, dxy, net_liquidity, source, inserted_at
+        INSERT INTO {table} (date, vix, fed_assets, tga, rrp, m2, ffr, sofr, net_liquidity, source, inserted_at)
+        SELECT date, vix, fed_assets, tga, rrp, m2, ffr, sofr, net_liquidity, source, inserted_at
         FROM tmp_macro
         ON CONFLICT (date) DO UPDATE SET
             vix = excluded.vix,
@@ -154,7 +118,6 @@ def upsert_macro(con: duckdb.DuckDBPyConnection, table: str, df: pd.DataFrame, s
             m2 = excluded.m2,
             ffr = excluded.ffr,
             sofr = excluded.sofr,
-            dxy = excluded.dxy,
             net_liquidity = excluded.net_liquidity,
             source = excluded.source,
             inserted_at = excluded.inserted_at
@@ -174,7 +137,6 @@ def refresh_macro(cfg: MacroIngestConfig, end: Optional[str] = None) -> dict:
             start = cfg.default_start
 
         df_fred = pd.DataFrame()
-        df_dxy = pd.DataFrame()
         errors = {}
 
         try:
@@ -182,13 +144,7 @@ def refresh_macro(cfg: MacroIngestConfig, end: Optional[str] = None) -> dict:
         except Exception as e:
             errors["fred"] = str(e)
 
-        try:
-            df_dxy = fetch_dxy(start=start, end=end)
-        except Exception as e:
-            errors["dxy"] = str(e)
-
-        df = merge_sources(df_fred, df_dxy)
-        inserted = upsert_macro(con, cfg.table, df, source="fred+yfinance")
+        inserted = upsert_macro(con, cfg.table, df_fred, source="fred")
 
         return {"inserted_rows": inserted, "errors": errors, "start": start, "end": end}
     finally:
