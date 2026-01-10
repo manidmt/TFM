@@ -70,8 +70,16 @@ def build_features(cfg: BuildFeaturesConfig, tickers: Iterable[str]) -> dict:
         
         dfm["date"] = pd.to_datetime(dfm["date"])
 
-        start = pd.to_datetime(cfg.start) if cfg.start else max(dfp["date"].min(), dfm["date"].min())
-        end = pd.to_datetime(cfg.end) if cfg.end else min(dfp["date"].max(), dfm["date"].max())
+        min_by_ticker = dfp.groupby("ticker")["date"].min()
+        max_by_ticker = dfp.groupby("ticker")["date"].max()
+
+        start = max(min_by_ticker.max(), dfm["date"].min())
+        end = min(max_by_ticker.min(), dfm["date"].max())
+
+        if cfg.start:
+            start = max(start, pd.to_datetime(cfg.start))
+        if cfg.end:
+            end = min(end, pd.to_datetime(cfg.end))
 
         master_idx = pd.date_range(start=start, end=end, freq=cfg.calendar_freq)
 
