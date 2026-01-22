@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 import duckdb
@@ -19,6 +19,8 @@ import pandas as pd
 from pandas_datareader import data as web  # FRED
 import yfinance as yf
 
+
+MACRO_STATE_COLS = ["vix", "fed_assets", "tga", "rrp", "m2", "ffr", "sofr"]
 
 @dataclass(frozen=True)
 class MacroIngestConfig:
@@ -76,6 +78,40 @@ def fetch_fred(start: str, end: Optional[str]) -> pd.DataFrame:
     df["date"] = pd.to_datetime(df["date"]).dt.date
     return df
 
+def to_business_day_ffill(df: pd.DataFrame, start: str, end: Optional[str]) -> pd.DataFrame:
+    """
+    Take a macro dataframe with a 'date' column and macro columns, and:
+      - convert date to datetime
+      - reindex to Business Days between start and end
+      - forward-fill macro state variables
+    """
+    if df is None or df.empty:
+        return df
+
+    out = df.copy()
+    out["date"] = pd.to_datetime(out["date"])
+    out = out.sort_values("date").set_index("date")
+
+    end_dt = pd.to_datetime(end) if end else out.index.max()
+    idx = pd.date_range(start=pd.to_datetime(start), end=end_dt, freq="B")
+
+    out = out.reindex(idx)
+
+    # Ensure numeric
+    for c in MACRO_STATE_COLS:
+        if c in out.columns:
+            out[c] = pd.to_numeric(out[c], errors="coerce")
+
+    # Forward-fill only state cols
+    fcols = [c for c in MACRO_STATE_COLS if c in out.columns]
+    out[fcols] = out[fcols].ffill()
+
+    out.index.name = "date"
+    out = out.reset_index()
+
+    # DuckDB schema expects DATE
+    out["date"] = out["date"].dt.date
+    return out
 
 def compute_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
@@ -83,6 +119,10 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
     # Example: net_liquidity = fed_assets - tga - rrp
     # Note: in FRED, WALCL usually in "millions of dollars" (depends on series),
     # and tga and rrp may be in different units.
+    for c in ["fed_assets", "tga", "rrp"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+
     if {"fed_assets", "tga", "rrp"}.issubset(df.columns):
         df["net_liquidity"] = df["fed_assets"] - df["tga"] - df["rrp"]
 
@@ -93,16 +133,14 @@ def upsert_macro(con: duckdb.DuckDBPyConnection, table: str, df: pd.DataFrame, s
     if df.empty:
         return 0
 
-    cols = [
-        "date", "vix", "fed_assets", "tga", "rrp", "m2", "ffr", "sofr", "net_liquidity"
-    ]
+    cols = ["date"] + MACRO_STATE_COLS + ["net_liquidity"]
     for c in cols:
         if c not in df.columns:
             df[c] = pd.NA
 
     df2 = df[cols].copy()
     df2["source"] = source
-    df2["inserted_at"] = datetime.utcnow()
+    df2["inserted_at"] = datetime.now(timezone.utc)
 
     con.register("tmp_macro", df2)
 
@@ -141,10 +179,13 @@ def refresh_macro(cfg: MacroIngestConfig, end: Optional[str] = None) -> dict:
 
         try:
             df_fred = fetch_fred(start=start, end=end)
+            df_fred = to_business_day_ffill(df_fred, start=start, end=end)
+            df_fred = compute_features(df_fred)
         except Exception as e:
             errors["fred"] = str(e)
 
         inserted = upsert_macro(con, cfg.table, df_fred, source="fred")
+
 
         return {"inserted_rows": inserted, "errors": errors, "start": start, "end": end}
     finally:
