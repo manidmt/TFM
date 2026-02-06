@@ -31,7 +31,7 @@ class Metrics:
 
 def compute_metrics(y_true, y_pred, labels=(0, 1, 2)) -> Metrics:
     acc = float(accuracy_score(y_true, y_pred))
-    macro = float(f1_score(y_true, y_pred, average="macro"))
+    macro = float(f1_score(y_true, y_pred, average="macro", zero_division=0))
     rep = classification_report(y_true, y_pred, labels=list(labels), digits=4, zero_division=0)
     cm = confusion_matrix(y_true, y_pred, labels=list(labels))
     return Metrics(accuracy=acc, macro_f1=macro, report=rep, confusion=cm)

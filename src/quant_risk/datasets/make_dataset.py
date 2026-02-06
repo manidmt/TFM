@@ -15,6 +15,7 @@ from typing import Iterable, Sequence
 
 import duckdb
 import pandas as pd
+import numpy as np
 
 
 @dataclass(frozen=True)
@@ -46,6 +47,7 @@ def _infer_feature_columns(df: pd.DataFrame) -> list[str]:
         "inserted_at",
         "close",
         "volume",
+        "vol_fwd",
     }
 
     cols = []
@@ -89,10 +91,10 @@ def load_joined(cfg: DatasetConfig) -> pd.DataFrame:
         # labels
         df_lab = con.execute(
             f"""
-            SELECT ticker, date, horizon, regime
+            SELECT ticker, date, horizon, vol_fwd
             FROM {cfg.labels_table}
             WHERE horizon = ?
-              AND ticker IN ({",".join(["?"] * len(cfg.tickers))})
+            AND ticker IN ({",".join(["?"] * len(cfg.tickers))})
             ORDER BY ticker, date
             """,
             [cfg.horizon, *cfg.tickers],
@@ -107,14 +109,12 @@ def load_joined(cfg: DatasetConfig) -> pd.DataFrame:
     df_feat["date"] = pd.to_datetime(df_feat["date"])
     df_lab["date"] = pd.to_datetime(df_lab["date"])
 
-    df = df_feat.merge(df_lab[["ticker", "date", "regime"]], on=["ticker", "date"], how="inner")
-
-    df["regime"] = df["regime"].astype(int)
+    df = df_feat.merge(df_lab[["ticker", "date", "vol_fwd"]], on=["ticker", "date"], how="inner")
 
     return df
 
 
-def make_splits(df: pd.DataFrame, train_end: str | None, valid_end: str | None) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def make_splits(df: pd.DataFrame, train_end: str | None, valid_end: str | None, horizon: int) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Time-series split by absolute dates.
     If train_end/valid_end not provided, infer by quantiles on the pooled timeline.
@@ -130,11 +130,33 @@ def make_splits(df: pd.DataFrame, train_end: str | None, valid_end: str | None) 
         train_end_dt = pd.to_datetime(train_end)
         valid_end_dt = pd.to_datetime(valid_end)
 
+    valid_start = train_end_dt + pd.offsets.BDay(horizon)
+    test_start  = valid_end_dt + pd.offsets.BDay(horizon)
+
     train = df[df["date"] <= train_end_dt].copy()
-    valid = df[(df["date"] > train_end_dt) & (df["date"] <= valid_end_dt)].copy()
-    test = df[df["date"] > valid_end_dt].copy()
+    valid = df[(df["date"] >= valid_start) & (df["date"] <= valid_end_dt)].copy()
+    test  = df[df["date"] >= test_start].copy()
 
     return train, valid, test
+
+def _fit_bins(train: pd.DataFrame, regime_bins: int, per_ticker: bool = True):
+    if per_ticker:
+        qs = train.groupby("ticker")["vol_fwd"].quantile([i/regime_bins for i in range(1, regime_bins)]).unstack()
+        # qs[ticker] = [q1, q2] si 3 bins
+        return qs
+    else:
+        cuts = train["vol_fwd"].quantile([i/regime_bins for i in range(1, regime_bins)]).tolist()
+        return cuts
+
+def _apply_bins(df: pd.DataFrame, bins, regime_bins: int, per_ticker: bool = True):
+    if per_ticker:
+        def bin_row(row):
+            cuts = bins.loc[row["ticker"]].values
+            return int(np.digitize(row["vol_fwd"], cuts, right=True))
+        return df.apply(bin_row, axis=1)
+    else:
+        return pd.Series(np.digitize(df["vol_fwd"].values, bins, right=True), index=df.index).astype(int)
+
 
 
 def build_xy(df: pd.DataFrame, feature_cols: Sequence[str]) -> tuple[pd.DataFrame, pd.Series]:
@@ -150,19 +172,28 @@ def make_dataset(cfg: DatasetConfig) -> dict:
         df = pd.get_dummies(df, columns=["ticker"], prefix="ticker")
 
     feature_cols = _infer_feature_columns(df)
+    assert "vol_fwd" not in feature_cols
     feature_cols = [c for c in feature_cols if c != "date"]
-    df_model = df.dropna(subset=feature_cols + ["regime"]).copy()
+    df_model = df.dropna(subset=feature_cols + ["vol_fwd"]).copy()
 
-    train, valid, test = make_splits(df_model, cfg.train_end, cfg.valid_end)
+    train, valid, test = make_splits(df_model, cfg.train_end, cfg.valid_end, cfg.horizon)
+
+    bins = _fit_bins(train, regime_bins=3, per_ticker=True)
+    for split in (train, valid, test):
+        split["regime"] = _apply_bins(split, bins, regime_bins=3, per_ticker=True)
+
+    # After bins applied
+    df_binned = pd.concat([train, valid, test], ignore_index=True).sort_values(["ticker", "date"])
 
     return {
-        "df": df_model,
+        "df": df_binned,
         "feature_cols": feature_cols,
         "train": train,
         "valid": valid,
         "test": test,
-        "n_rows": len(df_model),
+        "bins": bins,
+        "n_rows": len(df_binned),
         "n_features": len(feature_cols),
-        "start": str(df_model["date"].min().date()),
-        "end": str(df_model["date"].max().date()),
+        "start": str(df_binned["date"].min().date()),
+        "end": str(df_binned["date"].max().date()),
     }

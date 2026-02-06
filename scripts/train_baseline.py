@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import argparse
+from struct import pack
 
 from quant_risk.datasets.make_dataset import DatasetConfig, make_dataset, build_xy
 from quant_risk.models.baseline import make_models
@@ -41,6 +42,15 @@ def main() -> int:
     feature_cols = pack["feature_cols"]
 
     train, valid, test = pack["train"], pack["valid"], pack["test"]
+
+    print("\n--- Regime distribution ---")
+    for name, split in [("train", train), ("valid", valid), ("test", test)]:
+        vc = split["regime"].value_counts().sort_index()
+        print(name, vc.to_dict())
+
+    print("\n--- Train-fitted bins (q1/q2) ---")
+    print(pack.get("bins"))
+
 
     Xtr, ytr = build_xy(train, feature_cols)
     Xva, yva = build_xy(valid, feature_cols)
