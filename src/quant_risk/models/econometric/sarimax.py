@@ -89,6 +89,7 @@ def _forecast_se_from_ci(ci_low: float, ci_high: float, alpha: float = 0.05) -> 
     return float(width / (2.0 * z)) if np.isfinite(width) else float("nan")
 
 
+
 def make_sarimax_features(
     full_df: pd.DataFrame,
     fitted_models: dict[str, Any],
@@ -97,99 +98,141 @@ def make_sarimax_features(
     if cfg.target_col not in full_df.columns:
         raise ValueError(f"Target column '{cfg.target_col}' not found in full_df")
 
-    h = cfg.horizon
-    out = full_df.sort_values(["ticker", "date"]).copy()
+    horizon = cfg.horizon
+    output_df = full_df.sort_values(["ticker", "date"]).copy()
 
-    mean_col = f"sarimax_fcst_mean_h{h}"
-    se_col = f"sarimax_fcst_se_h{h}"
-    ciw_col = f"sarimax_ci_width_h{h}"
+    forecast_mean_col = f"sarimax_fcst_mean_h{horizon}"
+    forecast_se_col = f"sarimax_fcst_se_h{horizon}"
+    forecast_ci_width_col = f"sarimax_ci_width_h{horizon}"
 
-    out[mean_col] = np.nan
-    out[se_col] = np.nan
-    out[ciw_col] = np.nan
-    out["sarimax_resid"] = np.nan
-    out["sarimax_resid_std"] = np.nan
+    output_df[forecast_mean_col] = np.nan
+    output_df[forecast_se_col] = np.nan
+    output_df[forecast_ci_width_col] = np.nan
+    output_df["sarimax_resid"] = np.nan
+    output_df["sarimax_resid_std"] = np.nan
 
-    for ticker in out["ticker"].unique():
-        res0 = fitted_models.get(ticker)
-        if res0 is None:
+    for ticker in output_df["ticker"].unique():
+        fitted_result = fitted_models.get(ticker)
+        if fitted_result is None:
             continue
 
-        idx = out.index[out["ticker"] == ticker]
-        td = out.loc[idx].sort_values("date").copy()
+        ticker_idx = output_df.index[output_df["ticker"] == ticker]
+        ticker_df = output_df.loc[ticker_idx].sort_values("date").copy()
 
-        y_full = td[cfg.target_col].to_numpy(dtype=float)
+        target_values = ticker_df[cfg.target_col].to_numpy(dtype=float)
         if cfg.log_transform:
-            y_full = _safe_log(y_full)
+            target_values = _safe_log(target_values)
 
-        exog_full = None
+        exog_values = None
+        exog_dim = 0
         if cfg.exog_cols:
-            exog_full = td[list(cfg.exog_cols)].to_numpy(dtype=float)
+            exog_values = ticker_df[list(cfg.exog_cols)].to_numpy(dtype=float)
+            exog_dim = exog_values.shape[1]
 
-        params = getattr(res0, "params", None)
-        if params is None:
+        fitted_params = getattr(fitted_result, "params", None)
+        if fitted_params is None:
             continue
 
-        min_obs = max(10, cfg.order[0] + cfg.order[2] + cfg.order[1] + 1)
+        min_obs_for_state = max(10, cfg.order[0] + cfg.order[2] + cfg.order[1] + 1)
+        if len(ticker_df) <= min_obs_for_state + horizon:
+            continue
 
-        for i in range(min_obs, len(td)):
-            if i + h >= len(td):
-                continue
+        initial_model = SARIMAX(
+            target_values[:min_obs_for_state],
+            exog=exog_values[:min_obs_for_state] if exog_values is not None else None,
+            order=cfg.order,
+            seasonal_order=cfg.seasonal_order,
+            trend=cfg.trend,
+            enforce_stationarity=cfg.enforce_stationarity,
+            enforce_invertibility=cfg.enforce_invertibility,
+        )
+        state_result = initial_model.filter(fitted_params)
 
-            y_i = y_full[: i + 1]
-            exog_i = exog_full[: i + 1] if exog_full is not None else None
+        forecast_mean = np.full(len(ticker_df), np.nan, dtype=float)
+        forecast_se = np.full(len(ticker_df), np.nan, dtype=float)
+        forecast_ci_width = np.full(len(ticker_df), np.nan, dtype=float)
+        residuals = np.full(len(ticker_df), np.nan, dtype=float)
+        residuals_std = np.full(len(ticker_df), np.nan, dtype=float)
+
+        for idx_i in range(min_obs_for_state - 1, len(ticker_df) - horizon):
+            try:
+                if getattr(state_result, "resid", None) is not None and len(state_result.resid) > 0:
+                    residual_value = float(state_result.resid[-1])
+                    residuals[idx_i] = residual_value
+                    scale_value = float(getattr(state_result, "scale", np.nan))
+                    if np.isfinite(scale_value) and scale_value > 0:
+                        residuals_std[idx_i] = residual_value / np.sqrt(scale_value)
+
+                if exog_values is not None:
+                    last_exog_row = exog_values[idx_i].reshape(1, exog_dim)
+                    exog_future_values = np.repeat(last_exog_row, repeats=horizon, axis=0)
+                    forecast_result = state_result.get_forecast(steps=horizon, exog=exog_future_values)
+                else:
+                    forecast_result = state_result.get_forecast(steps=horizon)
+
+                predicted_mean = forecast_result.predicted_mean
+                mean_at_horizon = float(predicted_mean[-1])
+
+                ci = forecast_result.conf_int(alpha=0.05)
+                if hasattr(ci, "iloc"):
+                    ci_low, ci_high = float(ci.iloc[-1, 0]), float(ci.iloc[-1, 1])
+                else:
+                    ci_low, ci_high = float(ci[-1, 0]), float(ci[-1, 1])
+
+                se_at_horizon = _forecast_se_from_ci(ci_low, ci_high, alpha=0.05)
+                forecast_mean[idx_i] = mean_at_horizon
+                forecast_se[idx_i] = se_at_horizon
+                forecast_ci_width[idx_i] = ci_high - ci_low
+
+            except Exception:
+                pass
 
             try:
-                model_i = SARIMAX(
-                    y_i,
-                    exog=exog_i,
+                next_target = np.array([target_values[idx_i + 1]], dtype=float)
+                if exog_values is not None:
+                    next_exog = exog_values[idx_i + 1].reshape(1, exog_dim)
+                    state_result = state_result.append(endog=next_target, exog=next_exog, refit=False)
+                else:
+                    state_result = state_result.append(endog=next_target, refit=False)
+            except Exception:
+                window_start = max(0, idx_i + 1 - min_obs_for_state)
+                fallback_model = SARIMAX(
+                    target_values[window_start : idx_i + 2],
+                    exog=exog_values[window_start : idx_i + 2] if exog_values is not None else None,
                     order=cfg.order,
                     seasonal_order=cfg.seasonal_order,
                     trend=cfg.trend,
                     enforce_stationarity=cfg.enforce_stationarity,
                     enforce_invertibility=cfg.enforce_invertibility,
                 )
-                res_i = model_i.filter(params)
-
-                if getattr(res_i, "resid", None) is not None and len(res_i.resid) > 0:
-                    resid_i = float(res_i.resid[-1])
-                    td.loc[td.index[i], "sarimax_resid"] = resid_i
-                    scale = float(getattr(res_i, "scale", np.nan))
-                    if np.isfinite(scale) and scale > 0:
-                        td.loc[td.index[i], "sarimax_resid_std"] = resid_i / np.sqrt(scale)
-
-                if exog_full is not None:
-                    last_x = exog_full[i].reshape(1, -1)
-                    exog_future = np.repeat(last_x, repeats=h, axis=0)
-                    fc = res_i.get_forecast(steps=h, exog=exog_future)
-                else:
-                    fc = res_i.get_forecast(steps=h)
-
-                pm = fc.predicted_mean
-                mean_h = float(pm[-1])
-
-                ci = fc.conf_int(alpha=0.05)
-                if hasattr(ci, "iloc"):
-                    lo, hi = float(ci.iloc[-1, 0]), float(ci.iloc[-1, 1])
-                else:
-                    lo, hi = float(ci[-1, 0]), float(ci[-1, 1])
-
-                se_h = _forecast_se_from_ci(lo, hi, alpha=0.05)
-                ci_w = hi - lo
-
-                td.loc[td.index[i], mean_col] = mean_h
-                td.loc[td.index[i], se_col] = se_h
-                td.loc[td.index[i], ciw_col] = ci_w
-
-            except Exception:
-                continue
+                state_result = fallback_model.filter(fitted_params)
 
         if cfg.log_transform:
-            td[mean_col] = np.exp(td[mean_col].to_numpy(dtype=float))
+            forecast_mean = np.exp(forecast_mean)
 
-        out.loc[td.index, [mean_col, se_col, ciw_col, "sarimax_resid", "sarimax_resid_std"]] = td[
-            [mean_col, se_col, ciw_col, "sarimax_resid", "sarimax_resid_std"]
+        ticker_df[forecast_mean_col] = forecast_mean
+        ticker_df[forecast_se_col] = forecast_se
+        ticker_df[forecast_ci_width_col] = forecast_ci_width
+        ticker_df["sarimax_resid"] = residuals
+        ticker_df["sarimax_resid_std"] = residuals_std
+
+        output_df.loc[
+            ticker_df.index,
+            [
+                forecast_mean_col,
+                forecast_se_col,
+                forecast_ci_width_col,
+                "sarimax_resid",
+                "sarimax_resid_std",
+            ],
+        ] = ticker_df[
+            [
+                forecast_mean_col,
+                forecast_se_col,
+                forecast_ci_width_col,
+                "sarimax_resid",
+                "sarimax_resid_std",
+            ]
         ]
 
-    return out
-
+    return output_df

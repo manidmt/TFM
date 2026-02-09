@@ -35,6 +35,7 @@ class DatasetConfig:
     # test is (valid_end, max]
 
     pooled: bool = False
+    regime_bins: int = 3
     use_sarimax: bool = False
     sarimax_order: tuple[int, int, int] = (1, 0, 1)
     sarimax_seasonal_order: tuple[int, int, int, int] = (0, 0, 0, 0)
@@ -185,9 +186,11 @@ def make_dataset(cfg: DatasetConfig) -> dict:
 
     train, valid, test = make_splits(df_model, cfg.train_end, cfg.valid_end, cfg.horizon)
 
-    bins = _fit_bins(train, regime_bins=3, per_ticker=True)
+    bins = _fit_bins(train, regime_bins=cfg.regime_bins, per_ticker=True)
     for split in (train, valid, test):
-        split["regime"] = _apply_bins(split, bins, regime_bins=3, per_ticker=True)
+        split["regime"] = _apply_bins(
+            split, bins, regime_bins=cfg.regime_bins, per_ticker=True
+        )
 
     # After computing regime bins on train and before dropna final
     # Insert SARIMAX feature generation if enabled
@@ -206,10 +209,9 @@ def make_dataset(cfg: DatasetConfig) -> dict:
             train_nobs_by_ticker=train.groupby("ticker").size().to_dict(),
         )
 
-        train_for_sarimax_cols = ["ticker", "date", "vol_fwd", *list(cfg.sarimax_exog_cols)]
-        train_for_sarimax = train[train_for_sarimax_cols].copy()
+        train_for_sarimax = train[["ticker", "date", "vol_fwd"] + list(cfg.sarimax_exog_cols)].copy()
         fitted_models = fit_sarimax(train_for_sarimax, sarimax_cfg)
-
+        
         print("Generating SARIMAX features for all rows (train/valid/test) ...")
         sarimax_cols = [
             f"sarimax_fcst_mean_h{cfg.horizon}",
@@ -219,20 +221,30 @@ def make_dataset(cfg: DatasetConfig) -> dict:
             "sarimax_resid_std",
         ]
 
-        df_model = df_model.sort_values(["ticker", "date"]).copy()
-        df_model = make_sarimax_features(df_model, fitted_models, sarimax_cfg)
+        combined = pd.concat([train, valid, test], ignore_index=True).sort_values(["ticker", "date"])
+        combined = make_sarimax_features(combined, fitted_models, sarimax_cfg)
 
-        feature_cols = feature_cols + sarimax_cols
+        missing = [c for c in sarimax_cols if c not in combined.columns]
+        if missing:
+            raise RuntimeError(f"SARIMAX columns not present after feature generation: {missing}")
 
-        df_model = df_model.dropna(subset=feature_cols + ["vol_fwd"]).copy()
+        for c in sarimax_cols:
+            if c not in feature_cols:
+                feature_cols.append(c)
+
+        df_model = combined.copy()
+    else:
+        df_model = pd.concat([train, valid, test], ignore_index=True).sort_values(["ticker", "date"])
     
-    df_model = df.dropna(subset=feature_cols + ["vol_fwd"]).copy()
+    df_model = df_model.dropna(subset=feature_cols + ["vol_fwd"]).copy()
 
     train, valid, test = make_splits(df_model, cfg.train_end, cfg.valid_end, cfg.horizon)
 
-    bins = _fit_bins(train, regime_bins=3, per_ticker=True)
+    bins = _fit_bins(train, regime_bins=cfg.regime_bins, per_ticker=True)
     for split in (train, valid, test):
-        split["regime"] = _apply_bins(split, bins, regime_bins=3, per_ticker=True)
+        split["regime"] = _apply_bins(
+            split, bins, regime_bins=cfg.regime_bins, per_ticker=True
+        )
 
     # After bins applied
     df_binned = pd.concat([train, valid, test], ignore_index=True).sort_values(["ticker", "date"])
