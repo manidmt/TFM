@@ -43,3 +43,6 @@ htmlcov/
 # Conf
 .env
 config.yaml
+
+# Runs
+/runs/
