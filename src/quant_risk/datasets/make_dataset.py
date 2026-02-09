@@ -17,6 +17,8 @@ import duckdb
 import pandas as pd
 import numpy as np
 
+from quant_risk.models.econometric.sarimax import SarimaxConfig, fit_sarimax, make_sarimax_features
+
 
 @dataclass(frozen=True)
 class DatasetConfig:
@@ -33,7 +35,12 @@ class DatasetConfig:
     # test is (valid_end, max]
 
     pooled: bool = False
-
+    use_sarimax: bool = False
+    sarimax_order: tuple[int, int, int] = (1, 0, 1)
+    sarimax_seasonal_order: tuple[int, int, int, int] = (0, 0, 0, 0)
+    sarimax_trend: str | None = "c"
+    sarimax_log_transform: bool = True
+    sarimax_exog_cols: tuple[str, ...] = ()
 
 def _infer_feature_columns(df: pd.DataFrame) -> list[str]:
     """
@@ -174,6 +181,51 @@ def make_dataset(cfg: DatasetConfig) -> dict:
     feature_cols = _infer_feature_columns(df)
     assert "vol_fwd" not in feature_cols
     feature_cols = [c for c in feature_cols if c != "date"]
+    df_model = df.dropna(subset=feature_cols + ["vol_fwd"]).copy()
+
+    train, valid, test = make_splits(df_model, cfg.train_end, cfg.valid_end, cfg.horizon)
+
+    bins = _fit_bins(train, regime_bins=3, per_ticker=True)
+    for split in (train, valid, test):
+        split["regime"] = _apply_bins(split, bins, regime_bins=3, per_ticker=True)
+
+    # After computing regime bins on train and before dropna final
+    # Insert SARIMAX feature generation if enabled
+
+    if cfg.use_sarimax:
+        print("Fitting SARIMAX models on training data...")
+
+        sarimax_cfg = SarimaxConfig(
+            order=cfg.sarimax_order,
+            seasonal_order=cfg.sarimax_seasonal_order,
+            trend=cfg.sarimax_trend,
+            horizon=cfg.horizon,
+            target_col="vol_fwd",
+            log_transform=cfg.sarimax_log_transform,
+            exog_cols=cfg.sarimax_exog_cols,
+            train_nobs_by_ticker=train.groupby("ticker").size().to_dict(),
+        )
+
+        train_for_sarimax_cols = ["ticker", "date", "vol_fwd", *list(cfg.sarimax_exog_cols)]
+        train_for_sarimax = train[train_for_sarimax_cols].copy()
+        fitted_models = fit_sarimax(train_for_sarimax, sarimax_cfg)
+
+        print("Generating SARIMAX features for all rows (train/valid/test) ...")
+        sarimax_cols = [
+            f"sarimax_fcst_mean_h{cfg.horizon}",
+            f"sarimax_fcst_se_h{cfg.horizon}",
+            f"sarimax_ci_width_h{cfg.horizon}",
+            "sarimax_resid",
+            "sarimax_resid_std",
+        ]
+
+        df_model = df_model.sort_values(["ticker", "date"]).copy()
+        df_model = make_sarimax_features(df_model, fitted_models, sarimax_cfg)
+
+        feature_cols = feature_cols + sarimax_cols
+
+        df_model = df_model.dropna(subset=feature_cols + ["vol_fwd"]).copy()
+    
     df_model = df.dropna(subset=feature_cols + ["vol_fwd"]).copy()
 
     train, valid, test = make_splits(df_model, cfg.train_end, cfg.valid_end, cfg.horizon)
