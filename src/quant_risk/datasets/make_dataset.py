@@ -42,6 +42,7 @@ class DatasetConfig:
     sarimax_trend: str | None = "c"
     sarimax_log_transform: bool = True
     sarimax_exog_cols: tuple[str, ...] = ()
+    sarimax_target_col: str = "vol_fwd"
 
 def _infer_feature_columns(df: pd.DataFrame) -> list[str]:
     """
@@ -203,13 +204,15 @@ def make_dataset(cfg: DatasetConfig) -> dict:
             seasonal_order=cfg.sarimax_seasonal_order,
             trend=cfg.sarimax_trend,
             horizon=cfg.horizon,
-            target_col="vol_fwd",
+            target_col=cfg.sarimax_target_col,
             log_transform=cfg.sarimax_log_transform,
             exog_cols=cfg.sarimax_exog_cols,
             train_nobs_by_ticker=train.groupby("ticker").size().to_dict(),
         )
 
-        train_for_sarimax = train[["ticker", "date", "vol_fwd"] + list(cfg.sarimax_exog_cols)].copy()
+        train_for_sarimax = train[
+            ["ticker", "date", cfg.sarimax_target_col] + list(cfg.sarimax_exog_cols)
+        ].copy()
         fitted_models = fit_sarimax(train_for_sarimax, sarimax_cfg)
         
         print("Generating SARIMAX features for all rows (train/valid/test) ...")

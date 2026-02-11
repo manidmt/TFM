@@ -69,6 +69,17 @@ def train_eval_one(model, x_train, y_train, x_valid, y_valid, x_test, y_test) ->
     }
 
 
+def print_model_metrics(name: str, metrics_valid: dict, metrics_test: dict) -> None:
+    print(f"\n===== {name} =====")
+    print(f"VALID acc={metrics_valid['accuracy']:.4f} macroF1={metrics_valid['macro_f1']:.4f}")
+    print(metrics_valid["report"])
+    print("Per-class acc (VALID):", metrics_valid["per_class_acc"])
+
+    print(f"\nTEST  acc={metrics_test['accuracy']:.4f} macroF1={metrics_test['macro_f1']:.4f}")
+    print(metrics_test["report"])
+    print("Per-class acc (TEST):", metrics_test["per_class_acc"])
+
+
 def main() -> int:
     arg_parser = argparse.ArgumentParser(
         description="Train hybrid SARIMAX + tabular models for regime classification."
@@ -85,6 +96,7 @@ def main() -> int:
     # and "nl" uses exog_cols=("net_liquidity_diff",)
     arg_parser.add_argument("--sarimax_variants", default="none,nl")
     arg_parser.add_argument("--net_liquidity_col", default="net_liquidity_diff")
+    arg_parser.add_argument("--sarimax_target_col", default="rv_20")
 
     # model params
     arg_parser.add_argument("--rf_estimators", type=int, default=400)
@@ -118,6 +130,7 @@ def main() -> int:
         sarimax_seasonal_order=(0, 0, 0, 0),
         sarimax_trend="c",
         sarimax_log_transform=True,
+        sarimax_target_col=parsed_args.sarimax_target_col,
     )
 
     summary_records = []
@@ -153,6 +166,43 @@ def main() -> int:
             dataset_pack["test"],
         )
         feature_columns = dataset_pack["feature_cols"]
+
+        # def _corr(a, b):
+        #     s = np.corrcoef(a, b)[0, 1]
+        #     return float(s)
+
+        # def _safe_corr(df, x, y):
+        #     if x not in df.columns or y not in df.columns:
+        #         return None
+        #     tmp = df[[x, y]].dropna()
+        #     if len(tmp) < 30:
+        #         return None
+        #     return _corr(tmp[x].to_numpy(dtype=float), tmp[y].to_numpy(dtype=float))
+
+        # sar_mean = f"sarimax_fcst_mean_h{parsed_args.horizon}"
+
+        # print("\n--- Leakage sanity checks (per split) ---")
+        # for name, split in [("train", train_df), ("valid", valid_df), ("test", test_df)]:
+        #     c1 = _safe_corr(split, sar_mean, "vol_fwd")
+        #     c2 = _safe_corr(split, "sarimax_resid", "vol_fwd")
+        #     c3 = _safe_corr(split, sar_mean, "rv_20")
+        #     c4 = _safe_corr(split, "sarimax_resid", "rv_20")
+        #     print(f"{name:5s} corr({sar_mean}, vol_fwd) = {c1}")
+        #     print(f"{name:5s} corr(sarimax_resid, vol_fwd) = {c2}")
+        #     print(f"{name:5s} corr({sar_mean}, rv_20) = {c3}")
+        #     print(f"{name:5s} corr(sarimax_resid, rv_20) = {c4}")
+
+        # h = parsed_args.horizon
+        # tmp = test_df.sort_values(["ticker", "date"]).copy()
+        # tmp["vol_fwd_plus_h"] = tmp.groupby("ticker")["vol_fwd"].shift(-h)
+        # tmp["rv_20_plus_h"] = tmp.groupby("ticker")["rv_20"].shift(-h)
+
+        # print("\n--- Alignment check (TEST) ---")
+        # print("corr(sarimax_fcst_mean, vol_fwd[t])   =", _safe_corr(tmp, sar_mean, "vol_fwd"))
+        # print("corr(sarimax_fcst_mean, vol_fwd[t+h]) =", _safe_corr(tmp, sar_mean, "vol_fwd_plus_h"))
+        # print("corr(sarimax_fcst_mean, rv_20[t])     =", _safe_corr(tmp, sar_mean, "rv_20"))
+        # print("corr(sarimax_fcst_mean, rv_20[t+h])   =", _safe_corr(tmp, sar_mean, "rv_20_plus_h"))
+
 
         # Persist bins + feature cols for reproducibility
         bins = dataset_pack.get("bins", None)
@@ -204,11 +254,14 @@ def main() -> int:
         save_json(variant_dir / "metrics.json", metrics_by_model)
 
         # Print key metrics to console
+        display_names = {
+            "logit": "LOGIT (multinomial)",
+            "rf": "RandomForest",
+        }
         for name in ["logit", "rf"]:
             va = metrics_by_model[name]["valid"]
             te = metrics_by_model[name]["test"]
-            print(f"\n{name.upper()}  VALID acc={va['accuracy']:.4f} macroF1={va['macro_f1']:.4f}")
-            print(f"{name.upper()}  TEST  acc={te['accuracy']:.4f} macroF1={te['macro_f1']:.4f}")
+            print_model_metrics(display_names[name], va, te)
 
             summary_records.append(
                 {

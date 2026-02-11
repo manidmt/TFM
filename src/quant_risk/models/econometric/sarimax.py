@@ -32,7 +32,7 @@ class SarimaxConfig:
     seasonal_order: tuple[int, int, int, int] = (0, 0, 0, 0)
     trend: Optional[str] = "c"
     horizon: int = 5
-    target_col: str = "vol_fwd"
+    target_col: str = "rv_20"
     log_transform: bool = True
     exog_cols: tuple[str, ...] = ()
     enforce_stationarity: bool = True
