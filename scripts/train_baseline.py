@@ -19,6 +19,17 @@ from quant_risk.models.baseline import make_models
 from quant_risk.models.metrics import compute_metrics, per_class_accuracy
 
 
+def print_model_metrics(name: str, metrics_valid, metrics_test) -> None:
+    print(f"\n===== {name} =====")
+    print(f"VALID acc={metrics_valid.accuracy:.4f} macroF1={metrics_valid.macro_f1:.4f}")
+    print(metrics_valid.report)
+    print("Per-class acc (VALID):", per_class_accuracy(metrics_valid.confusion))
+
+    print(f"\nTEST  acc={metrics_test.accuracy:.4f} macroF1={metrics_test.macro_f1:.4f}")
+    print(metrics_test.report)
+    print("Per-class acc (TEST):", per_class_accuracy(metrics_test.confusion))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", default="data/db/financial_data.duckdb")
@@ -66,14 +77,7 @@ def main() -> int:
     m_va = compute_metrics(yva, pred_va)
     m_te = compute_metrics(yte, pred_te)
 
-    print("\n===== LOGIT (multinomial) =====")
-    print(f"VALID acc={m_va.accuracy:.4f} macroF1={m_va.macro_f1:.4f}")
-    print(m_va.report)
-    print("Per-class acc (VALID):", per_class_accuracy(m_va.confusion))
-
-    print(f"\nTEST  acc={m_te.accuracy:.4f} macroF1={m_te.macro_f1:.4f}")
-    print(m_te.report)
-    print("Per-class acc (TEST):", per_class_accuracy(m_te.confusion))
+    print_model_metrics("LOGIT (multinomial)", m_va, m_te)
 
     # ---- RF ----
     models.rf.fit(Xtr, ytr)
@@ -83,14 +87,7 @@ def main() -> int:
     m_va = compute_metrics(yva, pred_va)
     m_te = compute_metrics(yte, pred_te)
 
-    print("\n===== RandomForest =====")
-    print(f"VALID acc={m_va.accuracy:.4f} macroF1={m_va.macro_f1:.4f}")
-    print(m_va.report)
-    print("Per-class acc (VALID):", per_class_accuracy(m_va.confusion))
-
-    print(f"\nTEST  acc={m_te.accuracy:.4f} macroF1={m_te.macro_f1:.4f}")
-    print(m_te.report)
-    print("Per-class acc (TEST):", per_class_accuracy(m_te.confusion))
+    print_model_metrics("RandomForest", m_va, m_te)
 
     return 0
 
