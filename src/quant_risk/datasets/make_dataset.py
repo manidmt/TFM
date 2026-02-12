@@ -18,6 +18,7 @@ import pandas as pd
 import numpy as np
 
 from quant_risk.models.econometric.sarimax import SarimaxConfig, fit_sarimax, make_sarimax_features
+from quant_risk.models.econometric.garch import GarchConfig, fit_garch, make_garch_features
 
 
 @dataclass(frozen=True)
@@ -42,7 +43,16 @@ class DatasetConfig:
     sarimax_trend: str | None = "c"
     sarimax_log_transform: bool = True
     sarimax_exog_cols: tuple[str, ...] = ()
-    sarimax_target_col: str = "vol_fwd"
+    sarimax_target_col: str = "rv_20"
+    use_garch: bool = False
+    garch_p: int = 1
+    garch_q: int = 1
+    garch_dist: str = "normal"
+    garch_mean: str = "zero"
+    garch_vol: str = "Garch"
+    garch_target_col: str = "logret"
+    garch_annualize: bool = False
+    garch_scale: float = 100.0
 
 def _infer_feature_columns(df: pd.DataFrame) -> list[str]:
     """
@@ -193,8 +203,9 @@ def make_dataset(cfg: DatasetConfig) -> dict:
             split, bins, regime_bins=cfg.regime_bins, per_ticker=True
         )
 
-    # After computing regime bins on train and before dropna final
-    # Insert SARIMAX feature generation if enabled
+    # After computing regime bins on train and before dropna final,
+    # optionally generate econometric features (SARIMAX and/or GARCH).
+    combined = pd.concat([train, valid, test], ignore_index=True).sort_values(["ticker", "date"])
 
     if cfg.use_sarimax:
         print("Fitting SARIMAX models on training data...")
@@ -214,7 +225,7 @@ def make_dataset(cfg: DatasetConfig) -> dict:
             ["ticker", "date", cfg.sarimax_target_col] + list(cfg.sarimax_exog_cols)
         ].copy()
         fitted_models = fit_sarimax(train_for_sarimax, sarimax_cfg)
-        
+
         print("Generating SARIMAX features for all rows (train/valid/test) ...")
         sarimax_cols = [
             f"sarimax_fcst_mean_h{cfg.horizon}",
@@ -224,7 +235,6 @@ def make_dataset(cfg: DatasetConfig) -> dict:
             "sarimax_resid_std",
         ]
 
-        combined = pd.concat([train, valid, test], ignore_index=True).sort_values(["ticker", "date"])
         combined = make_sarimax_features(combined, fitted_models, sarimax_cfg)
 
         missing = [c for c in sarimax_cols if c not in combined.columns]
@@ -235,9 +245,45 @@ def make_dataset(cfg: DatasetConfig) -> dict:
             if c not in feature_cols:
                 feature_cols.append(c)
 
-        df_model = combined.copy()
-    else:
-        df_model = pd.concat([train, valid, test], ignore_index=True).sort_values(["ticker", "date"])
+    if cfg.use_garch:
+        print("Fitting GARCH models on training data...")
+
+        garch_cfg = GarchConfig(
+            p=cfg.garch_p,
+            q=cfg.garch_q,
+            dist=cfg.garch_dist,
+            mean=cfg.garch_mean,
+            vol=cfg.garch_vol,
+            horizon=cfg.horizon,
+            target_col=cfg.garch_target_col,
+            annualize=cfg.garch_annualize,
+            scale=cfg.garch_scale,
+            train_nobs_by_ticker=train.groupby("ticker").size().to_dict(),
+        )
+
+        train_for_garch = train[["ticker", "date", cfg.garch_target_col]].copy()
+        fitted_garch = fit_garch(train_for_garch, garch_cfg)
+
+        print("Generating GARCH features for all rows (train/valid/test) ...")
+        garch_cols = [
+            "garch_sigma_t",
+            f"garch_sigma_fwd_h{cfg.horizon}",
+            f"garch_var_fwd_h{cfg.horizon}",
+            "garch_resid",
+            "garch_z",
+        ]
+
+        combined = make_garch_features(combined, fitted_garch, garch_cfg)
+
+        missing = [c for c in garch_cols if c not in combined.columns]
+        if missing:
+            raise RuntimeError(f"GARCH columns not present after feature generation: {missing}")
+
+        for c in garch_cols:
+            if c not in feature_cols:
+                feature_cols.append(c)
+
+    df_model = combined.copy()
     
     df_model = df_model.dropna(subset=feature_cols + ["vol_fwd"]).copy()
 
