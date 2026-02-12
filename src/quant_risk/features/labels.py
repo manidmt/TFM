@@ -41,7 +41,7 @@ def build_labels(cfg: BuildLabelsConfig) -> dict:
             # forward-looking volatility: std of returns in [t+1 .. t+h]
             tmp["vol_fwd"] = (
                 tmp.groupby("ticker")["ret"]
-                   .transform(lambda s: s.shift(-1).rolling(h).std())
+                .transform(lambda s: s.shift(-1).rolling(h).std().shift(-(h-1)))
             )
 
             tmp["horizon"] = h
