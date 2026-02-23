@@ -1,0 +1,16 @@
+# Grid search para scripts/train_hybrid_garch_tabular.py
+# Uso:
+# python scripts/train_hybrid_garch_tabular.py --preset default_h20 --grid_config config/grid_hybrid_garch.yaml
+
+grid:
+  garch_p: [1, 2]
+  garch_q: [1, 2]
+  garch_dist: ["normal"]
+  garch_mean: ["zero"]
+  garch_vol: ["Garch"]
+  garch_target_col: ["logret"]
+  garch_scale: [80.0, 100.0]
+  garch_annualize: [false]
+
+  rf_estimators: [300, 500]
+  rf_min_leaf: [5, 10]
