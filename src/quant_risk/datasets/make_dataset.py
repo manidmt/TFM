@@ -187,6 +187,17 @@ def build_xy(df: pd.DataFrame, feature_cols: Sequence[str]) -> tuple[pd.DataFram
 def make_dataset(cfg: DatasetConfig) -> dict:
     df = load_joined(cfg)
 
+    if cfg.use_sarimax and cfg.sarimax_target_col == "vol_fwd":
+        raise ValueError(
+            "sarimax_target_col='vol_fwd' would leak future information. "
+            "Use a past-only series such as rv_20."
+        )
+    if cfg.use_garch and cfg.garch_target_col == "vol_fwd":
+        raise ValueError(
+            "garch_target_col='vol_fwd' would leak future information. "
+            "Use a past-only return/vol proxy such as logret or rv_20."
+        )
+
     if cfg.pooled:
         df = pd.get_dummies(df, columns=["ticker"], prefix="ticker")
 
@@ -203,9 +214,10 @@ def make_dataset(cfg: DatasetConfig) -> dict:
             split, bins, regime_bins=cfg.regime_bins, per_ticker=True
         )
 
-    # After computing regime bins on train and before dropna final,
-    # optionally generate econometric features (SARIMAX and/or GARCH).
-    combined = pd.concat([train, valid, test], ignore_index=True).sort_values(["ticker", "date"])
+    # Build econometric features on the full chronological panel.
+    # This preserves in-between gap dates in model state updates and keeps
+    # walk-forward recursion realistic while remaining leakage-safe.
+    combined = df_model.sort_values(["ticker", "date"]).copy()
 
     if cfg.use_sarimax:
         print("Fitting SARIMAX models on training data...")
