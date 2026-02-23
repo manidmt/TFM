@@ -46,8 +46,57 @@ def test_sarimax_config_defaults():
     assert cfg.order == (1, 0, 1)
     assert cfg.seasonal_order == (0, 0, 0, 0)
     assert cfg.horizon == 5
-    assert cfg.target_col == "vol_fwd"
+    assert cfg.target_col == "rv_20"
     assert cfg.log_transform is True
+
+
+def test_sarimax_no_future_leakage_alignment(sample_train_data):
+    """Perturbing far-future rows must not change forecasts on earlier dates."""
+    horizon = 5
+    cutoff = pd.Timestamp("2020-03-20")
+
+    base = sample_train_data.sort_values(["ticker", "date"]).copy()
+    train_df = base[base["date"] <= cutoff].copy()
+
+    cfg = SarimaxConfig(order=(1, 0, 0), horizon=horizon, target_col="rv_20", exog_cols=())
+    models = fit_sarimax(train_df, cfg)
+
+    altered = base.copy()
+    future_mask = altered["date"] > pd.Timestamp("2020-04-20")
+    altered.loc[future_mask, "rv_20"] = altered.loc[future_mask, "rv_20"] * 25.0
+
+    out_base = make_sarimax_features(base, models, cfg)
+    out_alt = make_sarimax_features(altered, models, cfg)
+
+    fwd_col = f"sarimax_fcst_mean_h{horizon}"
+    pre_cutoff = out_base["date"] <= cutoff
+    diff = (out_base.loc[pre_cutoff, fwd_col] - out_alt.loc[pre_cutoff, fwd_col]).abs()
+    assert diff.fillna(0.0).max() < 1e-12
+
+
+def test_sarimax_alignment_sanity(sample_train_data):
+    """Forecast should be more related to a future realized proxy than current return noise."""
+    horizon = 5
+    cfg = SarimaxConfig(order=(1, 0, 0), horizon=horizon, target_col="rv_20", exog_cols=())
+
+    models = fit_sarimax(sample_train_data, cfg)
+    out = make_sarimax_features(sample_train_data, models, cfg)
+
+    fwd_col = f"sarimax_fcst_mean_h{horizon}"
+    ticker_a = out[out["ticker"] == "A"].sort_values("date").copy()
+
+    contemporaneous_proxy = ticker_a["vol_fwd"]
+    future_proxy = ticker_a["vol_fwd"].shift(-horizon)
+
+    pair_now = pd.concat([ticker_a[fwd_col], contemporaneous_proxy], axis=1).dropna()
+    pair_fwd = pd.concat([ticker_a[fwd_col], future_proxy], axis=1).dropna()
+
+    corr_now = pair_now.corr().iloc[0, 1]
+    corr_fwd = pair_fwd.corr().iloc[0, 1]
+
+    assert np.isfinite(corr_now)
+    assert np.isfinite(corr_fwd)
+    assert corr_fwd >= corr_now
 
 
 def test_fit_sarimax_basic(sample_train_data):
