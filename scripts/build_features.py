@@ -48,7 +48,7 @@ def main() -> int:
         db_path=db_path,
         horizons=tuple(feat_cfg["targets"]["horizons"]),
         regime_bins=int(feat_cfg["targets"]["regime_bins"]),
-        vol_col="rv_20",
+        ret_col="logret",
     )
     print(build_labels(lcfg))
 

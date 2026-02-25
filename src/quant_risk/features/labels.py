@@ -21,13 +21,13 @@ class BuildLabelsConfig:
     out_table: str = "labels_regime"
     horizons: tuple[int, ...] = (5, 20)
     regime_bins: int = 3
-    vol_col: str = "rv_20"
+    ret_col: str = "logret"
 
 def build_labels(cfg: BuildLabelsConfig) -> dict:
     con = duckdb.connect(cfg.db_path)
     try:
         df = con.execute(
-            f"SELECT ticker, date, {cfg.vol_col} AS vol FROM {cfg.features_table} ORDER BY ticker, date"
+            f"SELECT ticker, date, {cfg.ret_col} AS ret FROM {cfg.features_table} ORDER BY ticker, date"
         ).df()
         if df.empty:
             raise RuntimeError("features_daily is empty; run build_features first.")
@@ -37,20 +37,17 @@ def build_labels(cfg: BuildLabelsConfig) -> dict:
         out_all = []
         for h in cfg.horizons:
             tmp = df.copy()
-            # forward-looking label: vol at t+h
-            tmp["vol_fwd"] = tmp.groupby("ticker")["vol"].shift(-h)
 
-            # quantile bins per ticker (avoids scale issues)
-            def _bin(s: pd.Series) -> pd.Series:
-                return pd.qcut(s, q=cfg.regime_bins, labels=False, duplicates="drop")
-
-            tmp["regime"] = tmp.groupby("ticker")["vol_fwd"].transform(_bin)
+            # forward-looking volatility: std of returns in [t+1 .. t+h]
+            tmp["vol_fwd"] = (
+                tmp.groupby("ticker")["ret"]
+                .transform(lambda s: s.shift(-1).rolling(h).std().shift(-(h-1)))
+            )
 
             tmp["horizon"] = h
-            tmp = tmp.dropna(subset=["vol_fwd", "regime"])
-            tmp["regime"] = tmp["regime"].astype(int)
+            tmp = tmp.dropna(subset=["vol_fwd"])
 
-            out_all.append(tmp[["ticker", "date", "horizon", "regime", "vol_fwd"]])
+            out_all.append(tmp[["ticker", "date", "horizon", "vol_fwd"]])
 
         out = pd.concat(out_all, ignore_index=True)
 
@@ -59,7 +56,6 @@ def build_labels(cfg: BuildLabelsConfig) -> dict:
               ticker TEXT,
               date DATE,
               horizon INTEGER,
-              regime INTEGER,
               vol_fwd DOUBLE
             )
         """)

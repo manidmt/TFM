@@ -1,0 +1,16 @@
+# Grid search para scripts/train_hybrid_sarimax_tabular.py
+# Uso:
+# python scripts/train_hybrid_sarimax_tabular.py --preset default_h20 --grid_config config/grid_hybrid_sarimax.yaml
+
+grid:
+  sarimax_order:
+    - [1, 0, 1]
+    - [2, 0, 1]
+  sarimax_seasonal_order:
+    - [0, 0, 0, 0]
+  sarimax_trend: ["c"]
+  sarimax_log_transform: [true]
+  sarimax_variants: ["none", "nl", "exog:net_liquidity_diff|rv_5"]
+
+  rf_estimators: [300, 500]
+  rf_min_leaf: [5, 10]

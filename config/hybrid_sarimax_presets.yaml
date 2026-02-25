@@ -1,0 +1,66 @@
+# Presets para scripts/train_hybrid_sarimax_tabular.py
+# Uso:
+# python scripts/train_hybrid_sarimax_tabular.py --preset default_h20
+
+presets:
+  default_h20:
+    description: "Preset base (h=20, exog none+nl)."
+    config_features: "config/features.yaml"
+    config_sources: "config/datasources.yaml"
+    horizon: 20
+    tickers: ["^GSPC", "BTC-USD", "TLT"]
+    pooled: false
+    sarimax_variants: "none,nl"
+    net_liquidity_col: "net_liquidity_diff"
+    sarimax_target_col: "rv_20"
+    sarimax_order: "1,0,1"
+    sarimax_seasonal_order: "0,0,0,0"
+    sarimax_trend: "c"
+    sarimax_log_transform: true
+    rf_estimators: 400
+    rf_min_leaf: 5
+    outdir: "runs/hybrid_sarimax"
+
+  robust_exog_h20:
+    description: "Comparación exog ampliada en h=20."
+    config_features: "config/features.yaml"
+    config_sources: "config/datasources.yaml"
+    horizon: 20
+    tickers: ["^GSPC", "BTC-USD", "TLT"]
+    pooled: false
+    sarimax_variants: "none,nl,exog:net_liquidity_diff|rv_5"
+    net_liquidity_col: "net_liquidity_diff"
+    sarimax_target_col: "rv_20"
+    sarimax_order: "1,0,1"
+    sarimax_seasonal_order: "0,0,0,0"
+    sarimax_trend: "c"
+    sarimax_log_transform: true
+    rf_estimators: 500
+    rf_min_leaf: 5
+    outdir: "runs/hybrid_sarimax"
+
+  short_h5_fast:
+    description: "Prueba rápida con h=5."
+    config_features: "config/features.yaml"
+    config_sources: "config/datasources.yaml"
+    horizon: 5
+    tickers: ["^GSPC", "BTC-USD", "TLT"]
+    pooled: false
+    sarimax_variants: "none,nl"
+    net_liquidity_col: "net_liquidity_diff"
+    sarimax_target_col: "rv_20"
+    sarimax_order: "1,0,1"
+    sarimax_seasonal_order: "0,0,0,0"
+    sarimax_trend: "c"
+    sarimax_log_transform: true
+    rf_estimators: 200
+    rf_min_leaf: 8
+    outdir: "runs/hybrid_sarimax_fast"
+
+commands_examples:
+  - name: "default_h20"
+    command: "python scripts/train_hybrid_sarimax_tabular.py --preset default_h20"
+  - name: "robust_exog_h20"
+    command: "python scripts/train_hybrid_sarimax_tabular.py --preset robust_exog_h20"
+  - name: "short_h5_fast"
+    command: "python scripts/train_hybrid_sarimax_tabular.py --preset short_h5_fast"
