@@ -36,6 +36,7 @@ class GarchConfig:
     vol: str = "Garch"
     horizon: int = 5
     target_col: str = "logret"
+    agg: str = "last"
     annualize: bool = False
     scale: float = 100.0
     train_nobs_by_ticker: dict[str, int] | None = None
@@ -111,14 +112,22 @@ def make_garch_features(
     h = int(cfg.horizon)
     if h <= 0:
         raise ValueError("horizon must be >= 1")
+    agg_kind = str(cfg.agg).lower()
+    if agg_kind not in {"last", "mean", "rms"}:
+        raise ValueError("cfg.agg must be one of: 'last', 'mean', 'rms'")
 
     output_df = full_df.sort_values(["ticker", "date"]).copy()
     sigma_fwd_col = f"garch_sigma_fwd_h{h}"
     var_fwd_col = f"garch_var_fwd_h{h}"
+    var_mean_col = f"garch_var_mean_h{h}"
+    sigma_rms_col = f"garch_sigma_rms_h{h}"
 
     output_df["garch_sigma_t"] = np.nan
     output_df[sigma_fwd_col] = np.nan
     output_df[var_fwd_col] = np.nan
+    if agg_kind != "last":
+        output_df[var_mean_col] = np.nan
+        output_df[sigma_rms_col] = np.nan
     output_df["garch_resid"] = np.nan
     output_df["garch_z"] = np.nan
 
@@ -148,6 +157,8 @@ def make_garch_features(
         sigma_t = np.full(n, np.nan, dtype=float)
         sigma_fwd = np.full(n, np.nan, dtype=float)
         var_fwd = np.full(n, np.nan, dtype=float)
+        var_mean = np.full(n, np.nan, dtype=float)
+        sigma_rms = np.full(n, np.nan, dtype=float)
         resid = np.full(n, np.nan, dtype=float)
         z = np.full(n, np.nan, dtype=float)
 
@@ -171,24 +182,33 @@ def make_garch_features(
                     z[i] = resid_scaled / sigma_scaled
 
                 fcast = fixed_i.forecast(horizon=h, reindex=False)
-                var_scaled_h = float(fcast.variance.values[-1, h - 1])
-                var_h = max(var_scaled_h / (scale * scale), 0.0)
+                var_path_scaled = np.asarray(fcast.variance.values[-1, :h], dtype=float)
+                var_path = np.maximum(var_path_scaled / (scale * scale), 0.0)
+                var_h = float(var_path[-1])
                 sigma_h = float(np.sqrt(var_h))
 
                 var_fwd[i] = var_h * ann_var_factor
                 sigma_fwd[i] = sigma_h * ann_sigma_factor
+                if agg_kind != "last":
+                    var_mean_h = float(np.mean(var_path))
+                    sigma_rms_h = float(np.sqrt(var_mean_h))
+                    var_mean[i] = var_mean_h * ann_var_factor
+                    sigma_rms[i] = sigma_rms_h * ann_sigma_factor
             except Exception:
                 continue
 
         ticker_df["garch_sigma_t"] = sigma_t
         ticker_df[sigma_fwd_col] = sigma_fwd
         ticker_df[var_fwd_col] = var_fwd
+        if agg_kind != "last":
+            ticker_df[var_mean_col] = var_mean
+            ticker_df[sigma_rms_col] = sigma_rms
         ticker_df["garch_resid"] = resid
         ticker_df["garch_z"] = z
 
-        output_df.loc[
-            ticker_df.index,
-            ["garch_sigma_t", sigma_fwd_col, var_fwd_col, "garch_resid", "garch_z"],
-        ] = ticker_df[["garch_sigma_t", sigma_fwd_col, var_fwd_col, "garch_resid", "garch_z"]]
+        assign_cols = ["garch_sigma_t", sigma_fwd_col, var_fwd_col, "garch_resid", "garch_z"]
+        if agg_kind != "last":
+            assign_cols.extend([var_mean_col, sigma_rms_col])
+        output_df.loc[ticker_df.index, assign_cols] = ticker_df[assign_cols]
 
     return output_df

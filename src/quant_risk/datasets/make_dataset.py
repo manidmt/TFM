@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Iterable, Sequence
 
 import duckdb
@@ -44,6 +44,8 @@ class DatasetConfig:
     sarimax_log_transform: bool = True
     sarimax_exog_cols: tuple[str, ...] = ()
     sarimax_target_col: str = "rv_20"
+    use_sarimax_garch_chain: bool = False
+    sarimax_chain_exog_cols: tuple[str, ...] = ()
     use_garch: bool = False
     garch_p: int = 1
     garch_q: int = 1
@@ -51,6 +53,8 @@ class DatasetConfig:
     garch_mean: str = "zero"
     garch_vol: str = "Garch"
     garch_target_col: str = "logret"
+    garch_agg: str = "last"
+    garch_chain_agg: str = "rms"
     garch_annualize: bool = False
     garch_scale: float = 100.0
 
@@ -197,6 +201,11 @@ def make_dataset(cfg: DatasetConfig) -> dict:
             "garch_target_col='vol_fwd' would leak future information. "
             "Use a past-only return/vol proxy such as logret or rv_20."
         )
+    if cfg.use_sarimax_garch_chain and (cfg.use_sarimax or cfg.use_garch):
+        raise ValueError(
+            "use_sarimax_garch_chain=True is mutually exclusive with use_sarimax/use_garch. "
+            "The chain mode already computes both stages."
+        )
 
     if cfg.pooled:
         df = pd.get_dummies(df, columns=["ticker"], prefix="ticker")
@@ -219,7 +228,86 @@ def make_dataset(cfg: DatasetConfig) -> dict:
     # walk-forward recursion realistic while remaining leakage-safe.
     combined = df_model.sort_values(["ticker", "date"]).copy()
 
-    if cfg.use_sarimax:
+    if cfg.use_sarimax_garch_chain:
+        print("Fitting chained SARIMAX->GARCH models on training data...")
+
+        chain_exog_cols = (
+            cfg.sarimax_chain_exog_cols
+            if cfg.sarimax_chain_exog_cols
+            else cfg.sarimax_exog_cols
+        )
+
+        sarimax_cfg_chain = SarimaxConfig(
+            order=cfg.sarimax_order,
+            seasonal_order=cfg.sarimax_seasonal_order,
+            trend=cfg.sarimax_trend,
+            horizon=cfg.horizon,
+            target_col="logret",
+            log_transform=False,
+            exog_cols=chain_exog_cols,
+            train_nobs_by_ticker=train.groupby("ticker").size().to_dict(),
+        )
+
+        train_for_sarimax_chain = train[
+            ["ticker", "date", "logret"] + list(chain_exog_cols)
+        ].copy()
+        fitted_sarimax_chain = fit_sarimax(train_for_sarimax_chain, sarimax_cfg_chain)
+
+        print("Generating chained SARIMAX features for all rows (train/valid/test) ...")
+        combined = make_sarimax_features(combined, fitted_sarimax_chain, sarimax_cfg_chain)
+
+        if "sarimax_resid" not in combined.columns:
+            raise RuntimeError("SARIMAX chain failed: 'sarimax_resid' was not generated.")
+
+        sarimax_cols = [
+            f"sarimax_fcst_mean_h{cfg.horizon}",
+            f"sarimax_fcst_se_h{cfg.horizon}",
+            f"sarimax_ci_width_h{cfg.horizon}",
+            "sarimax_resid",
+            "sarimax_resid_std",
+        ]
+        for c in sarimax_cols:
+            if c in combined.columns and c not in feature_cols:
+                feature_cols.append(c)
+
+        garch_cfg_chain = GarchConfig(
+            p=cfg.garch_p,
+            q=cfg.garch_q,
+            dist=cfg.garch_dist,
+            mean="zero",
+            vol=cfg.garch_vol,
+            horizon=cfg.horizon,
+            target_col="sarimax_resid",
+            agg=cfg.garch_chain_agg,
+            annualize=cfg.garch_annualize,
+            scale=cfg.garch_scale,
+        )
+
+        train_keys = train[["ticker", "date"]].drop_duplicates()
+        train_enriched = combined.merge(train_keys, on=["ticker", "date"], how="inner")
+        train_for_garch_chain = train_enriched[["ticker", "date", "sarimax_resid"]].dropna()
+        garch_train_sizes = train_for_garch_chain.groupby("ticker").size().to_dict()
+        garch_cfg_chain = replace(garch_cfg_chain, train_nobs_by_ticker=garch_train_sizes)
+
+        fitted_garch_chain = fit_garch(train_for_garch_chain, garch_cfg_chain)
+
+        print("Generating chained GARCH features for all rows (train/valid/test) ...")
+        combined = make_garch_features(combined, fitted_garch_chain, garch_cfg_chain)
+
+        garch_cols = [
+            "garch_sigma_t",
+            f"garch_sigma_fwd_h{cfg.horizon}",
+            f"garch_var_fwd_h{cfg.horizon}",
+            f"garch_var_mean_h{cfg.horizon}",
+            f"garch_sigma_rms_h{cfg.horizon}",
+            "garch_resid",
+            "garch_z",
+        ]
+        for c in garch_cols:
+            if c in combined.columns and c not in feature_cols:
+                feature_cols.append(c)
+
+    if cfg.use_sarimax and not cfg.use_sarimax_garch_chain:
         print("Fitting SARIMAX models on training data...")
 
         sarimax_cfg = SarimaxConfig(
@@ -257,7 +345,7 @@ def make_dataset(cfg: DatasetConfig) -> dict:
             if c not in feature_cols:
                 feature_cols.append(c)
 
-    if cfg.use_garch:
+    if cfg.use_garch and not cfg.use_sarimax_garch_chain:
         print("Fitting GARCH models on training data...")
 
         garch_cfg = GarchConfig(
@@ -268,6 +356,7 @@ def make_dataset(cfg: DatasetConfig) -> dict:
             vol=cfg.garch_vol,
             horizon=cfg.horizon,
             target_col=cfg.garch_target_col,
+            agg=cfg.garch_agg,
             annualize=cfg.garch_annualize,
             scale=cfg.garch_scale,
             train_nobs_by_ticker=train.groupby("ticker").size().to_dict(),
@@ -281,13 +370,18 @@ def make_dataset(cfg: DatasetConfig) -> dict:
             "garch_sigma_t",
             f"garch_sigma_fwd_h{cfg.horizon}",
             f"garch_var_fwd_h{cfg.horizon}",
+            f"garch_var_mean_h{cfg.horizon}",
+            f"garch_sigma_rms_h{cfg.horizon}",
             "garch_resid",
             "garch_z",
         ]
 
         combined = make_garch_features(combined, fitted_garch, garch_cfg)
 
-        missing = [c for c in garch_cols if c not in combined.columns]
+        missing = [
+            c for c in ["garch_sigma_t", f"garch_sigma_fwd_h{cfg.horizon}", f"garch_var_fwd_h{cfg.horizon}", "garch_resid", "garch_z"]
+            if c not in combined.columns
+        ]
         if missing:
             raise RuntimeError(f"GARCH columns not present after feature generation: {missing}")
 
