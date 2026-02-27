@@ -1,0 +1,21 @@
+# Grid search para scripts/train_tabular_fttransformer.py
+# Uso sugerido (loop externo):
+# python scripts/train_tabular_fttransformer.py --horizon 20 --tickers ^GSPC BTC-USD TLT ...
+
+grid:
+  horizon: [5, 20]
+  pooled: [false, true]
+  use_sarimax: [false, true]
+  use_garch: [false, true]
+
+  d_token: [16, 32, 64]
+  n_heads: [2, 4]
+  n_layers: [1, 2, 3]
+  ffn_multiplier: [2, 4]
+  dropout: [0.1, 0.2]
+  learning_rate: [5e-4, 1e-3]
+  weight_decay: [1e-5, 1e-4]
+  batch_size: [64, 128]
+  max_epochs: [20, 40]
+  patience: [4, 6]
+  seed: [42]
