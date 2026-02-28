@@ -30,6 +30,7 @@ class BuildFeaturesConfig:
     return_lags: tuple[int, ...] = (1, 5, 20)
     macro_lags: tuple[int, ...] = (1, 5, 20)
     macro_transform: str = "diff"   # diff | pct_change | logdiff
+    macro_publication_lags: dict[str, int] | None = None
 
 def _macro_transform(s: pd.Series, method: str) -> pd.Series:
     if method == "diff":
@@ -90,6 +91,20 @@ def build_features(cfg: BuildFeaturesConfig, tickers: Iterable[str]) -> dict:
 
         macro_cols = ["vix", "fed_assets", "tga", "rrp", "m2", "ffr", "sofr", "net_liquidity"]
         macro_cols = [c for c in macro_cols if c in dfm2.columns]
+        publication_lags = cfg.macro_publication_lags or {
+            "vix": 0,
+            "fed_assets": 1,
+            "tga": 1,
+            "rrp": 1,
+            "m2": 5,
+            "ffr": 1,
+            "sofr": 1,
+            "net_liquidity": 1,
+        }
+        for c in macro_cols:
+            lag_bdays = int(publication_lags.get(c, 0))
+            if lag_bdays > 0:
+                dfm2[c] = dfm2[c].shift(lag_bdays)
         for c in macro_cols:
             dfm2[f"{c}_{cfg.macro_transform}"] = _macro_transform(dfm2[c].astype(float), cfg.macro_transform)
 
