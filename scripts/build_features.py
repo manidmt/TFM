@@ -41,6 +41,7 @@ def main() -> int:
         return_lags=tuple(feat_cfg["features"]["returns"]["lags"]),
         macro_lags=tuple(feat_cfg["features"]["macro_transforms"]["lags"]),
         macro_transform=feat_cfg["features"]["macro_transforms"]["method"],
+        macro_publication_lags=feat_cfg.get("features", {}).get("macro_publication_lags"),
     )
     print(build_features(bcfg, tickers=tickers))
 
