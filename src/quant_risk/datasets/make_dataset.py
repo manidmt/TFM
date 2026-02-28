@@ -172,6 +172,8 @@ def _fit_bins(train: pd.DataFrame, regime_bins: int, per_ticker: bool = True):
         return cuts
 
 def _apply_bins(df: pd.DataFrame, bins, regime_bins: int, per_ticker: bool = True):
+    if df.empty:
+        return pd.Series(index=df.index, dtype=int)
     if per_ticker:
         def bin_row(row):
             cuts = bins.loc[row["ticker"]].values
@@ -179,6 +181,15 @@ def _apply_bins(df: pd.DataFrame, bins, regime_bins: int, per_ticker: bool = Tru
         return df.apply(bin_row, axis=1)
     else:
         return pd.Series(np.digitize(df["vol_fwd"].values, bins, right=True), index=df.index).astype(int)
+
+
+def _assert_no_future_cols(cols: tuple[str, ...], banned: set[str], context: str) -> None:
+    bad = [c for c in cols if c in banned]
+    if bad:
+        raise ValueError(
+            f"{context}: forbidden columns for dataset: {bad}. "
+            f"Banned={sorted(banned)}"
+        )
 
 
 
@@ -206,11 +217,24 @@ def make_dataset(cfg: DatasetConfig) -> dict:
             "use_sarimax_garch_chain=True is mutually exclusive with use_sarimax/use_garch. "
             "The chain mode already computes both stages."
         )
+    banned_future = {"vol_fwd"}
+    _assert_no_future_cols(
+        tuple(cfg.sarimax_exog_cols), banned_future, "sarimax_exog_cols"
+    )
+    _assert_no_future_cols(
+        tuple(cfg.sarimax_chain_exog_cols), banned_future, "sarimax_chain_exog_cols"
+    )
 
     if cfg.pooled:
-        df = pd.get_dummies(df, columns=["ticker"], prefix="ticker")
+        ticker_dummies = pd.get_dummies(df["ticker"], prefix="ticker")
+        df = pd.concat([df, ticker_dummies], axis=1)
 
-    feature_cols = _infer_feature_columns(df)
+    # Infer base feature columns from TRAIN only to avoid selection leakage.
+    train_for_feature_selection, _, _ = make_splits(df, cfg.train_end, cfg.valid_end, cfg.horizon)
+    if train_for_feature_selection.empty:
+        raise RuntimeError("Training split is empty; cannot infer feature columns.")
+
+    feature_cols = _infer_feature_columns(train_for_feature_selection)
     assert "vol_fwd" not in feature_cols
     feature_cols = [c for c in feature_cols if c != "date"]
     df_model = df.dropna(subset=feature_cols + ["vol_fwd"]).copy()
