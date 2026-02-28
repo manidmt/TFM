@@ -25,6 +25,7 @@ from sklearn.metrics import (
 class Metrics:
     accuracy: float
     macro_f1: float
+    weighted_f1: float
     report: str
     confusion: np.ndarray
 
@@ -32,9 +33,16 @@ class Metrics:
 def compute_metrics(y_true, y_pred, labels=(0, 1, 2)) -> Metrics:
     acc = float(accuracy_score(y_true, y_pred))
     macro = float(f1_score(y_true, y_pred, average="macro", zero_division=0))
+    weighted = float(f1_score(y_true, y_pred, average="weighted", zero_division=0))
     rep = classification_report(y_true, y_pred, labels=list(labels), digits=4, zero_division=0)
     cm = confusion_matrix(y_true, y_pred, labels=list(labels))
-    return Metrics(accuracy=acc, macro_f1=macro, report=rep, confusion=cm)
+    return Metrics(
+        accuracy=acc,
+        macro_f1=macro,
+        weighted_f1=weighted,
+        report=rep,
+        confusion=cm,
+    )
 
 
 def per_class_accuracy(cm: np.ndarray) -> dict[int, float]:
