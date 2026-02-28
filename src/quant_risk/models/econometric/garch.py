@@ -20,11 +20,14 @@ stateful recursion if needed for very long histories.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from typing import Any
 
 import numpy as np
 import pandas as pd
 from arch.univariate import ConstantMean, GARCH, Normal, ZeroMean
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -161,6 +164,8 @@ def make_garch_features(
         sigma_rms = np.full(n, np.nan, dtype=float)
         resid = np.full(n, np.nan, dtype=float)
         z = np.full(n, np.nan, dtype=float)
+        err = 0
+        max_err = max(25, int(0.10 * len(ticker_df)))
 
         params = ticker_fit["params"]
 
@@ -194,7 +199,14 @@ def make_garch_features(
                     sigma_rms_h = float(np.sqrt(var_mean_h))
                     var_mean[i] = var_mean_h * ann_var_factor
                     sigma_rms[i] = sigma_rms_h * ann_sigma_factor
-            except Exception:
+            except Exception as e:
+                err += 1
+                if err in (1, 5, 10) or err % 50 == 0:
+                    logger.warning("[garch] ticker=%s i=%s error=%r", ticker, i, e)
+                if err > max_err:
+                    raise RuntimeError(
+                        f"[garch] Too many errors for ticker={ticker}: {err}/{len(ticker_df)}"
+                    ) from e
                 continue
 
         ticker_df["garch_sigma_t"] = sigma_t
