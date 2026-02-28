@@ -19,11 +19,14 @@ Key design:
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
 from statsmodels.tsa.statespace.sarimax import SARIMAX
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -109,6 +112,7 @@ def make_sarimax_features(
     output_df[forecast_se_col] = np.nan
     output_df[forecast_ci_width_col] = np.nan
     output_df["sarimax_resid"] = np.nan
+    output_df["sarimax_resid_log"] = np.nan
     output_df["sarimax_resid_std"] = np.nan
 
     for ticker in output_df["ticker"].unique():
@@ -153,6 +157,10 @@ def make_sarimax_features(
         forecast_ci_width = np.full(len(ticker_df), np.nan, dtype=float)
         residuals = np.full(len(ticker_df), np.nan, dtype=float)
         residuals_std = np.full(len(ticker_df), np.nan, dtype=float)
+        ci_low_log = np.full(len(ticker_df), np.nan, dtype=float)
+        ci_high_log = np.full(len(ticker_df), np.nan, dtype=float)
+        err = 0
+        max_err = max(25, int(0.10 * len(ticker_df)))
 
         for idx_i in range(min_obs_for_state - 1, len(ticker_df) - horizon):
             try:
@@ -183,9 +191,17 @@ def make_sarimax_features(
                 forecast_mean[idx_i] = mean_at_horizon
                 forecast_se[idx_i] = se_at_horizon
                 forecast_ci_width[idx_i] = ci_high - ci_low
+                ci_low_log[idx_i] = ci_low
+                ci_high_log[idx_i] = ci_high
 
-            except Exception:
-                pass
+            except Exception as e:
+                err += 1
+                if err in (1, 5, 10) or err % 50 == 0:
+                    logger.warning("[sarimax] ticker=%s i=%s error=%r", ticker, idx_i, e)
+                if err > max_err:
+                    raise RuntimeError(
+                        f"[sarimax] Too many errors for ticker={ticker}: {err}/{len(ticker_df)}"
+                    ) from e
 
             try:
                 next_target = np.array([target_values[idx_i + 1]], dtype=float)
@@ -194,26 +210,53 @@ def make_sarimax_features(
                     state_result = state_result.append(endog=next_target, exog=next_exog, refit=False)
                 else:
                     state_result = state_result.append(endog=next_target, refit=False)
-            except Exception:
+            except Exception as e:
+                err += 1
+                if err in (1, 5, 10) or err % 50 == 0:
+                    logger.warning("[sarimax] ticker=%s i=%s state-update error=%r", ticker, idx_i, e)
+                if err > max_err:
+                    raise RuntimeError(
+                        f"[sarimax] Too many errors for ticker={ticker}: {err}/{len(ticker_df)}"
+                    ) from e
+
                 window_start = max(0, idx_i + 1 - min_obs_for_state)
-                fallback_model = SARIMAX(
-                    target_values[window_start : idx_i + 2],
-                    exog=exog_values[window_start : idx_i + 2] if exog_values is not None else None,
-                    order=cfg.order,
-                    seasonal_order=cfg.seasonal_order,
-                    trend=cfg.trend,
-                    enforce_stationarity=cfg.enforce_stationarity,
-                    enforce_invertibility=cfg.enforce_invertibility,
-                )
-                state_result = fallback_model.filter(fitted_params)
+                try:
+                    fallback_model = SARIMAX(
+                        target_values[window_start : idx_i + 2],
+                        exog=exog_values[window_start : idx_i + 2] if exog_values is not None else None,
+                        order=cfg.order,
+                        seasonal_order=cfg.seasonal_order,
+                        trend=cfg.trend,
+                        enforce_stationarity=cfg.enforce_stationarity,
+                        enforce_invertibility=cfg.enforce_invertibility,
+                    )
+                    state_result = fallback_model.filter(fitted_params)
+                except Exception as fallback_e:
+                    err += 1
+                    if err in (1, 5, 10) or err % 50 == 0:
+                        logger.warning(
+                            "[sarimax] ticker=%s i=%s fallback error=%r",
+                            ticker,
+                            idx_i,
+                            fallback_e,
+                        )
+                    if err > max_err:
+                        raise RuntimeError(
+                            f"[sarimax] Too many errors for ticker={ticker}: {err}/{len(ticker_df)}"
+                        ) from fallback_e
+                    continue
 
         if cfg.log_transform:
-            forecast_mean = np.exp(forecast_mean)
+            mean_log = forecast_mean.copy()
+            forecast_mean = np.exp(mean_log)
+            forecast_se = np.exp(mean_log) * forecast_se
+            forecast_ci_width = np.exp(ci_high_log) - np.exp(ci_low_log)
 
         ticker_df[forecast_mean_col] = forecast_mean
         ticker_df[forecast_se_col] = forecast_se
         ticker_df[forecast_ci_width_col] = forecast_ci_width
         ticker_df["sarimax_resid"] = residuals
+        ticker_df["sarimax_resid_log"] = residuals
         ticker_df["sarimax_resid_std"] = residuals_std
 
         output_df.loc[
@@ -223,6 +266,7 @@ def make_sarimax_features(
                 forecast_se_col,
                 forecast_ci_width_col,
                 "sarimax_resid",
+                "sarimax_resid_log",
                 "sarimax_resid_std",
             ],
         ] = ticker_df[
@@ -231,6 +275,7 @@ def make_sarimax_features(
                 forecast_se_col,
                 forecast_ci_width_col,
                 "sarimax_resid",
+                "sarimax_resid_log",
                 "sarimax_resid_std",
             ]
         ]
