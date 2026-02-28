@@ -16,6 +16,15 @@ features:
   macro_transforms:
     method: "diff"
     lags: [1, 5, 20]
+  macro_publication_lags:
+    vix: 0
+    fed_assets: 1
+    tga: 1
+    rrp: 1
+    m2: 5
+    ffr: 1
+    sofr: 1
+    net_liquidity: 1
 
 split:
   train_end: "2020-12-31"
