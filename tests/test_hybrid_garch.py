@@ -86,6 +86,20 @@ def test_fit_garch_returns_models_per_ticker(sample_train_data):
     assert "params" in fitted["B"]
 
 
+def test_fit_garch_with_tstudent_distribution(sample_train_data):
+    """GARCH should support heavy-tail innovations via Student's t distribution."""
+    train_df = sample_train_data[sample_train_data["date"] <= pd.Timestamp("2020-09-30")].copy()
+    cfg = GarchConfig(horizon=5, dist="tstudent")
+
+    fitted = fit_garch(train_df, cfg)
+    features = make_garch_features(sample_train_data, fitted, cfg)
+
+    assert fitted["A"] is not None
+    assert fitted["B"] is not None
+    assert "garch_sigma_fwd_h5" in features.columns
+    assert features["garch_sigma_fwd_h5"].notna().sum() > 0
+
+
 def test_make_garch_features_columns(sample_train_data):
     """Test that GARCH features have expected columns."""
     train_df = sample_train_data[sample_train_data["date"] <= pd.Timestamp("2020-09-30")].copy()

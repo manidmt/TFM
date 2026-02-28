@@ -25,7 +25,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from arch.univariate import ConstantMean, GARCH, Normal, ZeroMean
+from arch.univariate import ConstantMean, GARCH, Normal, StudentsT, ZeroMean
 
 logger = logging.getLogger(__name__)
 
@@ -59,10 +59,16 @@ def _build_mean_model(y: np.ndarray, cfg: GarchConfig):
 
     model.volatility = GARCH(p=cfg.p, o=0, q=cfg.q)
 
-    if cfg.dist.lower() != "normal":
-        raise ValueError(f"Unsupported distribution dist='{cfg.dist}'. Only 'normal' is supported.")
-
-    model.distribution = Normal()
+    dist_kind = cfg.dist.lower()
+    if dist_kind in {"normal", "gaussian"}:
+        model.distribution = Normal()
+    elif dist_kind in {"t", "studentt", "student-t", "tstudent", "students_t"}:
+        model.distribution = StudentsT()
+    else:
+        raise ValueError(
+            f"Unsupported distribution dist='{cfg.dist}'. "
+            "Use 'normal' or 'tstudent'."
+        )
     return model
 
 
