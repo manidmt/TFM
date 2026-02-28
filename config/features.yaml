@@ -25,6 +25,14 @@ features:
     ffr: 1
     sofr: 1
     net_liquidity: 1
+  shock_features:
+    rv_long_window: 60
+    rv_ema_spans: [10, 30]
+    vol_of_vol_window: 20
+    return_shock_window: 60
+    return_shock_quantiles: [0.8, 0.9]
+    volume_z_window: 20
+    cross_corr_window: 20
 
 split:
   train_end: "2020-12-31"
