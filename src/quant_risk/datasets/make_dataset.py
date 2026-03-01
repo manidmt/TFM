@@ -10,8 +10,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Iterable, Sequence
+import re
 
 import duckdb
 import pandas as pd
@@ -44,6 +45,8 @@ class DatasetConfig:
     sarimax_log_transform: bool = True
     sarimax_exog_cols: tuple[str, ...] = ()
     sarimax_target_col: str = "rv_20"
+    use_sarimax_garch_chain: bool = False
+    sarimax_chain_exog_cols: tuple[str, ...] = ()
     use_garch: bool = False
     garch_p: int = 1
     garch_q: int = 1
@@ -51,6 +54,8 @@ class DatasetConfig:
     garch_mean: str = "zero"
     garch_vol: str = "Garch"
     garch_target_col: str = "logret"
+    garch_agg: str = "last"
+    garch_chain_agg: str = "rms"
     garch_annualize: bool = False
     garch_scale: float = 100.0
 
@@ -73,8 +78,10 @@ def _infer_feature_columns(df: pd.DataFrame) -> list[str]:
     for c in df.columns:
         if c in exclude:
             continue
-        # drop target-like realized vol features
-        if c.startswith("rv_"):
+        # Drop only raw realized-vol columns (rv_5, rv_20, rv_60, ...).
+        # Keep engineered volatility features (e.g., rv_slope_20_60, rv_ratio_20_60)
+        # and non-rv prefixed aliases (vol_*).
+        if re.fullmatch(r"rv_\d+", c):
             continue
         if c == "logret":
             continue
@@ -92,7 +99,8 @@ def _infer_feature_columns(df: pd.DataFrame) -> list[str]:
 
 
 def load_joined(cfg: DatasetConfig) -> pd.DataFrame:
-    con = duckdb.connect(cfg.db_path)
+    # Read-only connection avoids cross-process file locks during parallel runs.
+    con = duckdb.connect(cfg.db_path, read_only=True)
     try:
         # features
         df_feat = con.execute(
@@ -168,6 +176,8 @@ def _fit_bins(train: pd.DataFrame, regime_bins: int, per_ticker: bool = True):
         return cuts
 
 def _apply_bins(df: pd.DataFrame, bins, regime_bins: int, per_ticker: bool = True):
+    if df.empty:
+        return pd.Series(index=df.index, dtype=int)
     if per_ticker:
         def bin_row(row):
             cuts = bins.loc[row["ticker"]].values
@@ -175,6 +185,15 @@ def _apply_bins(df: pd.DataFrame, bins, regime_bins: int, per_ticker: bool = Tru
         return df.apply(bin_row, axis=1)
     else:
         return pd.Series(np.digitize(df["vol_fwd"].values, bins, right=True), index=df.index).astype(int)
+
+
+def _assert_no_future_cols(cols: tuple[str, ...], banned: set[str], context: str) -> None:
+    bad = [c for c in cols if c in banned]
+    if bad:
+        raise ValueError(
+            f"{context}: forbidden columns for dataset: {bad}. "
+            f"Banned={sorted(banned)}"
+        )
 
 
 
@@ -197,11 +216,29 @@ def make_dataset(cfg: DatasetConfig) -> dict:
             "garch_target_col='vol_fwd' would leak future information. "
             "Use a past-only return/vol proxy such as logret or rv_20."
         )
+    if cfg.use_sarimax_garch_chain and (cfg.use_sarimax or cfg.use_garch):
+        raise ValueError(
+            "use_sarimax_garch_chain=True is mutually exclusive with use_sarimax/use_garch. "
+            "The chain mode already computes both stages."
+        )
+    banned_future = {"vol_fwd"}
+    _assert_no_future_cols(
+        tuple(cfg.sarimax_exog_cols), banned_future, "sarimax_exog_cols"
+    )
+    _assert_no_future_cols(
+        tuple(cfg.sarimax_chain_exog_cols), banned_future, "sarimax_chain_exog_cols"
+    )
 
     if cfg.pooled:
-        df = pd.get_dummies(df, columns=["ticker"], prefix="ticker")
+        ticker_dummies = pd.get_dummies(df["ticker"], prefix="ticker")
+        df = pd.concat([df, ticker_dummies], axis=1)
 
-    feature_cols = _infer_feature_columns(df)
+    # Infer base feature columns from TRAIN only to avoid selection leakage.
+    train_for_feature_selection, _, _ = make_splits(df, cfg.train_end, cfg.valid_end, cfg.horizon)
+    if train_for_feature_selection.empty:
+        raise RuntimeError("Training split is empty; cannot infer feature columns.")
+
+    feature_cols = _infer_feature_columns(train_for_feature_selection)
     assert "vol_fwd" not in feature_cols
     feature_cols = [c for c in feature_cols if c != "date"]
     df_model = df.dropna(subset=feature_cols + ["vol_fwd"]).copy()
@@ -219,7 +256,110 @@ def make_dataset(cfg: DatasetConfig) -> dict:
     # walk-forward recursion realistic while remaining leakage-safe.
     combined = df_model.sort_values(["ticker", "date"]).copy()
 
-    if cfg.use_sarimax:
+    def _append_garch_dynamic_features(df_in: pd.DataFrame) -> pd.DataFrame:
+        """Add GARCH transition features (delta/ratio/diff/acceleration)."""
+        out_df = df_in.sort_values(["ticker", "date"]).copy()
+        sigma_t_col = "garch_sigma_t"
+        sigma_h_col = f"garch_sigma_fwd_h{cfg.horizon}"
+        if sigma_t_col not in out_df.columns or sigma_h_col not in out_df.columns:
+            return out_df
+
+        delta_col = f"garch_delta_sigma_h{cfg.horizon}"
+        ratio_col = f"garch_ratio_sigma_h{cfg.horizon}"
+        diff_col = "garch_sigma_t_diff1"
+        accel_col = "garch_sigma_t_diff2"
+
+        out_df[delta_col] = out_df[sigma_h_col] - out_df[sigma_t_col]
+        out_df[ratio_col] = out_df[sigma_h_col] / out_df[sigma_t_col].replace(0.0, np.nan)
+        out_df[diff_col] = out_df.groupby("ticker")[sigma_t_col].diff(1)
+        out_df[accel_col] = out_df.groupby("ticker")[diff_col].diff(1)
+        return out_df
+
+    if cfg.use_sarimax_garch_chain:
+        print("Fitting chained SARIMAX->GARCH models on training data...")
+
+        chain_exog_cols = (
+            cfg.sarimax_chain_exog_cols
+            if cfg.sarimax_chain_exog_cols
+            else cfg.sarimax_exog_cols
+        )
+
+        sarimax_cfg_chain = SarimaxConfig(
+            order=cfg.sarimax_order,
+            seasonal_order=cfg.sarimax_seasonal_order,
+            trend=cfg.sarimax_trend,
+            horizon=cfg.horizon,
+            target_col="logret",
+            log_transform=False,
+            exog_cols=chain_exog_cols,
+            train_nobs_by_ticker=train.groupby("ticker").size().to_dict(),
+        )
+
+        train_for_sarimax_chain = train[
+            ["ticker", "date", "logret"] + list(chain_exog_cols)
+        ].copy()
+        fitted_sarimax_chain = fit_sarimax(train_for_sarimax_chain, sarimax_cfg_chain)
+
+        print("Generating chained SARIMAX features for all rows (train/valid/test) ...")
+        combined = make_sarimax_features(combined, fitted_sarimax_chain, sarimax_cfg_chain)
+
+        if "sarimax_resid" not in combined.columns:
+            raise RuntimeError("SARIMAX chain failed: 'sarimax_resid' was not generated.")
+
+        sarimax_cols = [
+            f"sarimax_fcst_mean_h{cfg.horizon}",
+            f"sarimax_fcst_se_h{cfg.horizon}",
+            f"sarimax_ci_width_h{cfg.horizon}",
+            "sarimax_resid",
+            "sarimax_resid_std",
+        ]
+        for c in sarimax_cols:
+            if c in combined.columns and c not in feature_cols:
+                feature_cols.append(c)
+
+        garch_cfg_chain = GarchConfig(
+            p=cfg.garch_p,
+            q=cfg.garch_q,
+            dist=cfg.garch_dist,
+            mean="zero",
+            vol=cfg.garch_vol,
+            horizon=cfg.horizon,
+            target_col="sarimax_resid",
+            agg=cfg.garch_chain_agg,
+            annualize=cfg.garch_annualize,
+            scale=cfg.garch_scale,
+        )
+
+        train_keys = train[["ticker", "date"]].drop_duplicates()
+        train_enriched = combined.merge(train_keys, on=["ticker", "date"], how="inner")
+        train_for_garch_chain = train_enriched[["ticker", "date", "sarimax_resid"]].dropna()
+        garch_train_sizes = train_for_garch_chain.groupby("ticker").size().to_dict()
+        garch_cfg_chain = replace(garch_cfg_chain, train_nobs_by_ticker=garch_train_sizes)
+
+        fitted_garch_chain = fit_garch(train_for_garch_chain, garch_cfg_chain)
+
+        print("Generating chained GARCH features for all rows (train/valid/test) ...")
+        combined = make_garch_features(combined, fitted_garch_chain, garch_cfg_chain)
+        combined = _append_garch_dynamic_features(combined)
+
+        garch_cols = [
+            "garch_sigma_t",
+            f"garch_sigma_fwd_h{cfg.horizon}",
+            f"garch_var_fwd_h{cfg.horizon}",
+            f"garch_var_mean_h{cfg.horizon}",
+            f"garch_sigma_rms_h{cfg.horizon}",
+            "garch_resid",
+            "garch_z",
+            f"garch_delta_sigma_h{cfg.horizon}",
+            f"garch_ratio_sigma_h{cfg.horizon}",
+            "garch_sigma_t_diff1",
+            "garch_sigma_t_diff2",
+        ]
+        for c in garch_cols:
+            if c in combined.columns and c not in feature_cols:
+                feature_cols.append(c)
+
+    if cfg.use_sarimax and not cfg.use_sarimax_garch_chain:
         print("Fitting SARIMAX models on training data...")
 
         sarimax_cfg = SarimaxConfig(
@@ -257,7 +397,7 @@ def make_dataset(cfg: DatasetConfig) -> dict:
             if c not in feature_cols:
                 feature_cols.append(c)
 
-    if cfg.use_garch:
+    if cfg.use_garch and not cfg.use_sarimax_garch_chain:
         print("Fitting GARCH models on training data...")
 
         garch_cfg = GarchConfig(
@@ -268,6 +408,7 @@ def make_dataset(cfg: DatasetConfig) -> dict:
             vol=cfg.garch_vol,
             horizon=cfg.horizon,
             target_col=cfg.garch_target_col,
+            agg=cfg.garch_agg,
             annualize=cfg.garch_annualize,
             scale=cfg.garch_scale,
             train_nobs_by_ticker=train.groupby("ticker").size().to_dict(),
@@ -281,18 +422,28 @@ def make_dataset(cfg: DatasetConfig) -> dict:
             "garch_sigma_t",
             f"garch_sigma_fwd_h{cfg.horizon}",
             f"garch_var_fwd_h{cfg.horizon}",
+            f"garch_var_mean_h{cfg.horizon}",
+            f"garch_sigma_rms_h{cfg.horizon}",
             "garch_resid",
             "garch_z",
+            f"garch_delta_sigma_h{cfg.horizon}",
+            f"garch_ratio_sigma_h{cfg.horizon}",
+            "garch_sigma_t_diff1",
+            "garch_sigma_t_diff2",
         ]
 
         combined = make_garch_features(combined, fitted_garch, garch_cfg)
+        combined = _append_garch_dynamic_features(combined)
 
-        missing = [c for c in garch_cols if c not in combined.columns]
+        missing = [
+            c for c in ["garch_sigma_t", f"garch_sigma_fwd_h{cfg.horizon}", f"garch_var_fwd_h{cfg.horizon}", "garch_resid", "garch_z"]
+            if c not in combined.columns
+        ]
         if missing:
             raise RuntimeError(f"GARCH columns not present after feature generation: {missing}")
 
         for c in garch_cols:
-            if c not in feature_cols:
+            if c in combined.columns and c not in feature_cols:
                 feature_cols.append(c)
 
     df_model = combined.copy()

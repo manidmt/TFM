@@ -1,0 +1,20 @@
+# Grid search para scripts/train_tabular_tabnet.py
+# Uso sugerido (loop externo):
+# python scripts/train_tabular_tabnet.py --horizon 20 --tickers ^GSPC BTC-USD TLT ...
+
+grid:
+  horizon: [5, 20]
+  pooled: [false, true]
+  use_sarimax: [false, true]
+  use_garch: [false, true]
+
+  n_d: [8, 16, 24]
+  n_a: [8, 16, 24]
+  n_steps: [3, 4, 5]
+  max_epochs: [40, 80]
+  patience: [8, 12]
+  batch_size: [128, 256]
+  virtual_batch_size: [32, 64]
+  learning_rate: [0.01, 0.02]
+  weight_decay: [1e-5, 1e-4]
+  seed: [42]

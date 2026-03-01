@@ -5,7 +5,7 @@
 grid:
   garch_p: [1, 2]
   garch_q: [1, 2]
-  garch_dist: ["normal"]
+  garch_dist: ["normal", "tstudent"]
   garch_mean: ["zero"]
   garch_vol: ["Garch"]
   garch_target_col: ["logret"]

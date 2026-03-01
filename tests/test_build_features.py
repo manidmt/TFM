@@ -9,6 +9,9 @@
 '''
 
 import duckdb
+import pandas as pd
+
+from quant_risk.features.build import BuildFeaturesConfig, build_features
 
 DB = "data/db/financial_data.duckdb"
 
@@ -60,3 +63,58 @@ def test_features_has_required_columns():
         assert not missing, f"features_daily missing columns: {missing}"
     finally:
         con.close()
+
+
+def test_macro_publication_lag_is_applied(tmp_path):
+    db_path = tmp_path / "lag_test.duckdb"
+    con = duckdb.connect(str(db_path))
+    try:
+        dates = pd.bdate_range("2021-01-01", periods=10)
+
+        df_prices = pd.DataFrame(
+            {
+                "ticker": ["AAA"] * len(dates),
+                "date": dates,
+                "close": [100 + i for i in range(len(dates))],
+                "volume": [1000] * len(dates),
+            }
+        )
+        df_macro = pd.DataFrame(
+            {
+                "date": dates,
+                "vix": [10 + i for i in range(len(dates))],
+            }
+        )
+        con.execute("CREATE TABLE raw_prices AS SELECT * FROM df_prices")
+        con.execute("CREATE TABLE macro_features AS SELECT * FROM df_macro")
+    finally:
+        con.close()
+
+    cfg = BuildFeaturesConfig(
+        db_path=str(db_path),
+        rv_windows=(2,),
+        return_lags=(1,),
+        macro_lags=(1,),
+        macro_transform="diff",
+        macro_publication_lags={"vix": 2},
+    )
+    build_features(cfg, tickers=["AAA"])
+
+    con = duckdb.connect(str(db_path))
+    try:
+        out = con.execute(
+            """
+            SELECT date, vix
+            FROM features_daily
+            WHERE ticker = 'AAA'
+            ORDER BY date
+            """
+        ).df()
+    finally:
+        con.close()
+
+    out["date"] = pd.to_datetime(out["date"])
+    check_date = out["date"].iloc[0]
+    expected_date = check_date - pd.offsets.BDay(2)
+    expected_vix = float(df_macro.loc[df_macro["date"] == expected_date, "vix"].iloc[0])
+    assert float(out["vix"].iloc[0]) == expected_vix

@@ -41,6 +41,14 @@ def main() -> int:
         return_lags=tuple(feat_cfg["features"]["returns"]["lags"]),
         macro_lags=tuple(feat_cfg["features"]["macro_transforms"]["lags"]),
         macro_transform=feat_cfg["features"]["macro_transforms"]["method"],
+        macro_publication_lags=feat_cfg.get("features", {}).get("macro_publication_lags"),
+        rv_long_window=int(feat_cfg.get("features", {}).get("shock_features", {}).get("rv_long_window", 60)),
+        rv_ema_spans=tuple(feat_cfg.get("features", {}).get("shock_features", {}).get("rv_ema_spans", [10, 30])),
+        vol_of_vol_window=int(feat_cfg.get("features", {}).get("shock_features", {}).get("vol_of_vol_window", 20)),
+        return_shock_window=int(feat_cfg.get("features", {}).get("shock_features", {}).get("return_shock_window", 60)),
+        return_shock_quantiles=tuple(feat_cfg.get("features", {}).get("shock_features", {}).get("return_shock_quantiles", [0.8, 0.9])),
+        volume_z_window=int(feat_cfg.get("features", {}).get("shock_features", {}).get("volume_z_window", 20)),
+        cross_corr_window=int(feat_cfg.get("features", {}).get("shock_features", {}).get("cross_corr_window", 20)),
     )
     print(build_features(bcfg, tickers=tickers))
 

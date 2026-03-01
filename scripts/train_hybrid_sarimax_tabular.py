@@ -82,7 +82,9 @@ def print_model_metrics(name: str, metrics_valid: dict, metrics_test: dict) -> N
     print("Per-class acc (TEST):", metrics_test["per_class_acc"])
 
 
-def _flag_provided(flag: str) -> bool:
+def _flag_provided(flag: str | tuple[str, ...]) -> bool:
+    if isinstance(flag, tuple):
+        return any(f in sys.argv for f in flag)
     return flag in sys.argv
 
 
@@ -111,7 +113,7 @@ def _apply_preset_if_requested(parsed_args: argparse.Namespace) -> argparse.Name
         "sarimax_order": "--sarimax_order",
         "sarimax_seasonal_order": "--sarimax_seasonal_order",
         "sarimax_trend": "--sarimax_trend",
-        "sarimax_log_transform": "--sarimax_log_transform",
+        "sarimax_log_transform": ("--sarimax_log_transform", "--no-sarimax_log_transform"),
         "rf_estimators": "--rf_estimators",
         "rf_min_leaf": "--rf_min_leaf",
         "outdir": "--outdir",
@@ -250,7 +252,11 @@ def main() -> int:
     arg_parser.add_argument("--sarimax_order", default="1,0,1")
     arg_parser.add_argument("--sarimax_seasonal_order", default="0,0,0,0")
     arg_parser.add_argument("--sarimax_trend", default="c")
-    arg_parser.add_argument("--sarimax_log_transform", action="store_true", default=True)
+    arg_parser.add_argument(
+        "--sarimax_log_transform",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
 
     arg_parser.add_argument("--rf_estimators", type=int, default=400)
     arg_parser.add_argument("--rf_min_leaf", type=int, default=5)

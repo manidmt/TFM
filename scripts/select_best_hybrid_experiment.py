@@ -163,18 +163,22 @@ def build_experiments(model_type: str, grid_config_path: str, default_params: di
     return experiments
 
 
-def train_eval(model, x_train, y_train, x_valid, y_valid, x_test, y_test) -> dict:
+def train_eval_valid(model, x_train, y_train, x_valid, y_valid) -> dict:
     model.fit(x_train, y_train)
 
     pred_valid = model.predict(x_valid)
-    pred_test = model.predict(x_test)
-
     metrics_valid = compute_metrics(y_valid, pred_valid)
-    metrics_test = compute_metrics(y_test, pred_test)
 
     return {
         "valid_acc": float(metrics_valid.accuracy),
         "valid_macro_f1": float(metrics_valid.macro_f1),
+    }
+
+
+def eval_test(model, x_test, y_test) -> dict:
+    pred_test = model.predict(x_test)
+    metrics_test = compute_metrics(y_test, pred_test)
+    return {
         "test_acc": float(metrics_test.accuracy),
         "test_macro_f1": float(metrics_test.macro_f1),
     }
@@ -214,7 +218,11 @@ def main() -> int:
     parser.add_argument("--sarimax_order", default="1,0,1")
     parser.add_argument("--sarimax_seasonal_order", default="0,0,0,0")
     parser.add_argument("--sarimax_trend", default="c")
-    parser.add_argument("--sarimax_log_transform", action="store_true", default=True)
+    parser.add_argument(
+        "--sarimax_log_transform",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
     parser.add_argument("--sarimax_variants", default="none")
     parser.add_argument("--net_liquidity_col", default="net_liquidity_diff")
 
@@ -308,16 +316,14 @@ def main() -> int:
 
                 train_df = pack["train"]
                 valid_df = pack["valid"]
-                test_df = pack["test"]
                 feature_cols = pack["feature_cols"]
 
-                if train_df.empty or valid_df.empty or test_df.empty:
+                if train_df.empty or valid_df.empty:
                     skipped += 1
                     continue
 
                 x_train, y_train = build_xy(train_df, feature_cols)
                 x_valid, y_valid = build_xy(valid_df, feature_cols)
-                x_test, y_test = build_xy(test_df, feature_cols)
 
                 logit_model = Pipeline(
                     steps=[
@@ -334,8 +340,12 @@ def main() -> int:
                     class_weight="balanced_subsample",
                 )
 
-                metrics_logit = train_eval(logit_model, x_train, y_train, x_valid, y_valid, x_test, y_test)
-                metrics_rf = train_eval(rf_model, x_train, y_train, x_valid, y_valid, x_test, y_test)
+                metrics_logit = train_eval_valid(
+                    logit_model, x_train, y_train, x_valid, y_valid
+                )
+                metrics_rf = train_eval_valid(
+                    rf_model, x_train, y_train, x_valid, y_valid
+                )
 
                 best_model_name = "logit"
                 best_model_metrics = metrics_logit
@@ -362,6 +372,82 @@ def main() -> int:
                 print(f"[warn] No valid experiment for ticker={ticker}, horizon={horizon}")
                 continue
 
+            selected_experiment = best_record["params"]
+            base_cfg = dict(
+                db_path=db_path,
+                tickers=(ticker,),
+                horizon=int(horizon),
+                pooled=bool(args.pooled),
+                train_end=features_cfg["split"]["train_end"],
+                valid_end=features_cfg["split"]["val_end"],
+                regime_bins=features_cfg["targets"]["regime_bins"],
+            )
+            if args.model == "garch":
+                final_cfg = DatasetConfig(
+                    **base_cfg,
+                    use_garch=True,
+                    garch_p=selected_experiment["garch_p"],
+                    garch_q=selected_experiment["garch_q"],
+                    garch_dist=selected_experiment["garch_dist"],
+                    garch_mean=selected_experiment["garch_mean"],
+                    garch_vol=selected_experiment["garch_vol"],
+                    garch_target_col=selected_experiment["garch_target_col"],
+                    garch_scale=selected_experiment["garch_scale"],
+                    garch_annualize=selected_experiment["garch_annualize"],
+                )
+            else:
+                exog_cols = _variant_to_exog_cols(
+                    selected_experiment["sarimax_variant"], args.net_liquidity_col
+                )
+                final_cfg = DatasetConfig(
+                    **base_cfg,
+                    use_sarimax=True,
+                    sarimax_order=selected_experiment["sarimax_order"],
+                    sarimax_seasonal_order=selected_experiment["sarimax_seasonal_order"],
+                    sarimax_trend=selected_experiment["sarimax_trend"],
+                    sarimax_log_transform=selected_experiment["sarimax_log_transform"],
+                    sarimax_target_col=args.sarimax_target_col,
+                    sarimax_exog_cols=exog_cols,
+                )
+
+            final_pack = make_dataset(final_cfg)
+            final_train = final_pack["train"]
+            final_valid = final_pack["valid"]
+            final_test = final_pack["test"]
+            final_feature_cols = final_pack["feature_cols"]
+            if final_train.empty or final_valid.empty or final_test.empty:
+                result_payload["best_by_horizon"][horizon_key][ticker] = {
+                    "status": "best_no_test_split",
+                    "skipped_experiments": skipped,
+                }
+                print(f"[warn] Best experiment has empty split for ticker={ticker}, horizon={horizon}")
+                continue
+
+            x_train, y_train = build_xy(final_train, final_feature_cols)
+            x_valid, y_valid = build_xy(final_valid, final_feature_cols)
+            x_test, y_test = build_xy(final_test, final_feature_cols)
+
+            if best_record["best_model"] == "logit":
+                final_model = Pipeline(
+                    steps=[
+                        ("scaler", StandardScaler(with_mean=True, with_std=True)),
+                        ("clf", LogisticRegression(max_iter=2000, solver="lbfgs", random_state=42)),
+                    ]
+                )
+            else:
+                final_model = RandomForestClassifier(
+                    n_estimators=selected_experiment["rf_estimators"],
+                    max_depth=None,
+                    min_samples_leaf=selected_experiment["rf_min_leaf"],
+                    n_jobs=-1,
+                    random_state=42,
+                    class_weight="balanced_subsample",
+                )
+
+            valid_metrics = train_eval_valid(final_model, x_train, y_train, x_valid, y_valid)
+            test_metrics = eval_test(final_model, x_test, y_test)
+            best_record["metrics"] = {**valid_metrics, **test_metrics}
+            best_record["n_features"] = int(len(final_feature_cols))
             best_record["status"] = "ok"
             best_record["skipped_experiments"] = skipped
             result_payload["best_by_horizon"][horizon_key][ticker] = best_record

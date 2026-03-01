@@ -16,6 +16,23 @@ features:
   macro_transforms:
     method: "diff"
     lags: [1, 5, 20]
+  macro_publication_lags:
+    vix: 0
+    fed_assets: 1
+    tga: 1
+    rrp: 1
+    m2: 5
+    ffr: 1
+    sofr: 1
+    net_liquidity: 1
+  shock_features:
+    rv_long_window: 60
+    rv_ema_spans: [10, 30]
+    vol_of_vol_window: 20
+    return_shock_window: 60
+    return_shock_quantiles: [0.8, 0.9]
+    volume_z_window: 20
+    cross_corr_window: 20
 
 split:
   train_end: "2020-12-31"
