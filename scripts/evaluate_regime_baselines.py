@@ -31,6 +31,7 @@ from quant_risk.models.tabular.xgb import (
     fit as fit_xgb,
     make_model as make_xgb_model,
     predict as predict_xgb,
+    predict_proba as predict_proba_xgb,
 )
 
 
@@ -65,9 +66,10 @@ def _metrics_record(
     split_name: str,
     y_true,
     y_pred,
+    extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     m = compute_metrics(y_true, y_pred)
-    return {
+    out = {
         "model": model_name,
         "horizon": int(horizon),
         "split": split_name,
@@ -76,6 +78,38 @@ def _metrics_record(
         "weighted_f1": float(m.weighted_f1),
         "n_eval": int(len(y_true)),
         "confusion_matrix": m.confusion.tolist(),
+    }
+    if extra:
+        out.update(extra)
+    return out
+
+
+def _one_hot_probs(y: np.ndarray, n_classes: int) -> np.ndarray:
+    y_arr = np.asarray(y, dtype=int)
+    out = np.zeros((len(y_arr), int(n_classes)), dtype=float)
+    if len(y_arr):
+        out[np.arange(len(y_arr)), y_arr] = 1.0
+    return out
+
+
+def _aligned_split_with_persistence(pack: dict[str, Any], split_name: str, horizon: int) -> dict[str, Any]:
+    df_all = pack["df"][["ticker", "date", "regime"]].copy()
+    df_all["persist_pred"] = persistence_pred_from_regime(df_all, horizon=horizon, regime_col="regime")
+
+    split_df = pack[split_name][["ticker", "date", "regime"]].reset_index(drop=True).copy()
+    merged = split_df.merge(
+        df_all[["ticker", "date", "persist_pred"]],
+        on=["ticker", "date"],
+        how="left",
+    )
+    keep = merged["persist_pred"].notna().to_numpy()
+    if int(np.sum(keep)) == 0:
+        raise RuntimeError(f"No aligned rows for persistence in split={split_name}.")
+
+    return {
+        "keep_mask": keep,
+        "y_true": split_df.loc[keep, "regime"].to_numpy(dtype=int),
+        "y_persist": merged.loc[keep, "persist_pred"].to_numpy(dtype=int),
     }
 
 
@@ -198,6 +232,84 @@ def _eval_current_chain_xgb(
     ]
 
 
+def _eval_best_chain_from_walkforward(
+    base_cfg: dict[str, Any],
+    horizon: int,
+    asset: str,
+    walkforward_root: str,
+    xgb_n_jobs: int = 1,
+) -> list[dict[str, Any]]:
+    best_path = Path(walkforward_root) / f"h{int(horizon)}" / f"asset_{asset}" / "best.json"
+    if not best_path.exists():
+        raise FileNotFoundError(f"best.json not found: {best_path}")
+    with open(best_path, "r", encoding="utf-8") as f:
+        best = json.load(f)
+
+    cfg = DatasetConfig(
+        **base_cfg,
+        use_sarimax_garch_chain=True,
+        sarimax_order=tuple(best["sarimax_order"]),
+        sarimax_chain_exog_cols=tuple(best["sarimax_chain_exog_cols"]),
+        garch_p=int(best["garch_p"]),
+        garch_q=int(best["garch_q"]),
+        garch_dist=str(best["garch_dist"]),
+        garch_chain_agg=str(best["garch_chain_agg"]),
+        garch_scale=float(best["garch_scale"]),
+    )
+    pack = make_dataset(cfg)
+    feature_cols = pack["feature_cols"]
+    x_train, y_train = build_xy(pack["train"], feature_cols)
+    x_valid_full, y_valid_full = build_xy(pack["valid"], feature_cols)
+    x_test_full, _ = build_xy(pack["test"], feature_cols)
+
+    model_cfg = XGBConfig(
+        n_estimators=int(best["n_estimators"]),
+        max_depth=int(best["max_depth"]),
+        learning_rate=float(best["learning_rate"]),
+        subsample=float(best["subsample"]),
+        colsample_bytree=float(best["colsample_bytree"]),
+        min_child_weight=float(best["min_child_weight"]),
+        reg_lambda=float(best["reg_lambda"]),
+        n_jobs=int(xgb_n_jobs),
+        random_state=42,
+        seed=42,
+    )
+    model = make_xgb_model(model_cfg)
+    fit_xgb(model, x_train, y_train, X_valid=x_valid_full, y_valid=y_valid_full)
+
+    blend_alpha = float(best.get("mean_selected_alpha", 1.0))
+    blend_alpha = float(np.clip(blend_alpha, 0.0, 1.0))
+    model_name = "Best_ChainBlend_from_WF"
+
+    rows = []
+    for split_name, x_full in [("valid", x_valid_full), ("test", x_test_full)]:
+        aligned = _aligned_split_with_persistence(pack, split_name=split_name, horizon=int(horizon))
+        keep = np.asarray(aligned["keep_mask"], dtype=bool)
+        x_eval = x_full[keep]
+        y_eval = aligned["y_true"]
+        y_persist = aligned["y_persist"]
+
+        p_chain = predict_proba_xgb(model, x_eval)
+        if blend_alpha < 1.0:
+            p_persist = _one_hot_probs(y_persist, n_classes=p_chain.shape[1])
+            p_eval = blend_alpha * p_chain + (1.0 - blend_alpha) * p_persist
+            pred_eval = np.argmax(p_eval, axis=1).astype(int)
+        else:
+            pred_eval = np.argmax(p_chain, axis=1).astype(int)
+
+        rows.append(
+            _metrics_record(
+                model_name,
+                horizon,
+                split_name,
+                y_eval,
+                pred_eval,
+                extra={"blend_alpha": blend_alpha},
+            )
+        )
+    return rows
+
+
 def _split_class_balance(pack: dict[str, Any], horizon: int) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for split_name in ["train", "valid", "test"]:
@@ -251,6 +363,12 @@ def main() -> int:
     parser.add_argument("--horizons", nargs="+", type=int, default=[5, 20])
     parser.add_argument("--tickers", nargs="+", default=["^GSPC", "BTC-USD", "TLT"])
     parser.add_argument("--pooled", action="store_true")
+    parser.add_argument(
+        "--walkforward_root",
+        default="",
+        help="If set, evaluate best chain from walk-forward best.json under this root.",
+    )
+    parser.add_argument("--xgb_n_jobs", type=int, default=1)
     parser.add_argument("--outdir", default="runs/baseline_eval")
     args = parser.parse_args()
 
@@ -293,7 +411,22 @@ def main() -> int:
         )
         all_metrics.extend(_eval_rf_model("GARCH_plus_RF", garch_pack, horizon))
 
-        all_metrics.extend(_eval_current_chain_xgb(base_cfg, horizon))
+        if args.walkforward_root:
+            if len(args.tickers) != 1:
+                raise ValueError(
+                    "--walkforward_root requires single-ticker execution (use --tickers <asset>)."
+                )
+            all_metrics.extend(
+                _eval_best_chain_from_walkforward(
+                    base_cfg=base_cfg,
+                    horizon=int(horizon),
+                    asset=str(args.tickers[0]),
+                    walkforward_root=str(args.walkforward_root),
+                    xgb_n_jobs=int(args.xgb_n_jobs),
+                )
+            )
+        else:
+            all_metrics.extend(_eval_current_chain_xgb(base_cfg, horizon))
 
     metrics_df = pd.DataFrame(all_metrics).sort_values(["horizon", "split", "model"])
     test_table = metrics_df[metrics_df["split"] == "test"][
