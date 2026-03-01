@@ -156,6 +156,7 @@ def make_sarimax_features(
         forecast_se = np.full(len(ticker_df), np.nan, dtype=float)
         forecast_ci_width = np.full(len(ticker_df), np.nan, dtype=float)
         residuals = np.full(len(ticker_df), np.nan, dtype=float)
+        residuals_log = np.full(len(ticker_df), np.nan, dtype=float)
         residuals_std = np.full(len(ticker_df), np.nan, dtype=float)
         ci_low_log = np.full(len(ticker_df), np.nan, dtype=float)
         ci_high_log = np.full(len(ticker_df), np.nan, dtype=float)
@@ -166,7 +167,16 @@ def make_sarimax_features(
             try:
                 if getattr(state_result, "resid", None) is not None and len(state_result.resid) > 0:
                     residual_value = float(state_result.resid[-1])
-                    residuals[idx_i] = residual_value
+                    if cfg.log_transform:
+                        y_last_log = float(target_values[idx_i])
+                        # resid_log = y_log - yhat_log
+                        # resid = exp(y_log) - exp(yhat_log)
+                        residuals_log[idx_i] = residual_value
+                        residuals[idx_i] = float(
+                            np.exp(y_last_log) - np.exp(y_last_log - residual_value)
+                        )
+                    else:
+                        residuals[idx_i] = residual_value
                     scale_value = float(getattr(state_result, "scale", np.nan))
                     if np.isfinite(scale_value) and scale_value > 0:
                         residuals_std[idx_i] = residual_value / np.sqrt(scale_value)
@@ -256,7 +266,10 @@ def make_sarimax_features(
         ticker_df[forecast_se_col] = forecast_se
         ticker_df[forecast_ci_width_col] = forecast_ci_width
         ticker_df["sarimax_resid"] = residuals
-        ticker_df["sarimax_resid_log"] = residuals
+        if cfg.log_transform:
+            ticker_df["sarimax_resid_log"] = residuals_log
+        else:
+            ticker_df["sarimax_resid_log"] = np.nan
         ticker_df["sarimax_resid_std"] = residuals_std
 
         output_df.loc[

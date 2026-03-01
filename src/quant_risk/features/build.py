@@ -149,12 +149,20 @@ def build_features(cfg: BuildFeaturesConfig, tickers: Iterable[str]) -> dict:
                 sub[f"rv_{w}"] = sub["logret"].rolling(w).std()
             sub[f"rv_{cfg.rv_long_window}"] = sub["logret"].rolling(cfg.rv_long_window).std()
 
+            # Alias for long-horizon realized vol so it is available as model feature
+            # even if raw rv_* columns are filtered in dataset inference.
+            sub[f"vol_{cfg.rv_long_window}"] = sub[f"rv_{cfg.rv_long_window}"]
+
             # Volatility acceleration / spread style features
             sub["rv_slope_20_60"] = sub["rv_20"] - sub[f"rv_{cfg.rv_long_window}"]
             sub["rv_ratio_20_60"] = sub["rv_20"] / sub[f"rv_{cfg.rv_long_window}"].replace(0.0, np.nan)
             sub["rv_logdiff_20_60"] = np.log(sub["rv_20"].clip(lower=1e-12)) - np.log(
                 sub[f"rv_{cfg.rv_long_window}"].clip(lower=1e-12)
             )
+            # Non-rv prefixed aliases for robust feature selection.
+            sub["vol_slope_20_60"] = sub["rv_slope_20_60"]
+            sub["vol_ratio_20_60"] = sub["rv_ratio_20_60"]
+            sub["vol_logdiff_20_60"] = sub["rv_logdiff_20_60"]
 
             ema_fast, ema_slow = cfg.rv_ema_spans
             rv20_ema_fast = sub["rv_20"].ewm(span=ema_fast, adjust=False).mean()

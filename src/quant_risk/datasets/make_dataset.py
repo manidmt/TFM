@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from typing import Iterable, Sequence
+import re
 
 import duckdb
 import pandas as pd
@@ -77,8 +78,10 @@ def _infer_feature_columns(df: pd.DataFrame) -> list[str]:
     for c in df.columns:
         if c in exclude:
             continue
-        # drop target-like realized vol features
-        if c.startswith("rv_"):
+        # Drop only raw realized-vol columns (rv_5, rv_20, rv_60, ...).
+        # Keep engineered volatility features (e.g., rv_slope_20_60, rv_ratio_20_60)
+        # and non-rv prefixed aliases (vol_*).
+        if re.fullmatch(r"rv_\d+", c):
             continue
         if c == "logret":
             continue
