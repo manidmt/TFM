@@ -96,7 +96,8 @@ def _infer_feature_columns(df: pd.DataFrame) -> list[str]:
 
 
 def load_joined(cfg: DatasetConfig) -> pd.DataFrame:
-    con = duckdb.connect(cfg.db_path)
+    # Read-only connection avoids cross-process file locks during parallel runs.
+    con = duckdb.connect(cfg.db_path, read_only=True)
     try:
         # features
         df_feat = con.execute(
@@ -252,6 +253,25 @@ def make_dataset(cfg: DatasetConfig) -> dict:
     # walk-forward recursion realistic while remaining leakage-safe.
     combined = df_model.sort_values(["ticker", "date"]).copy()
 
+    def _append_garch_dynamic_features(df_in: pd.DataFrame) -> pd.DataFrame:
+        """Add GARCH transition features (delta/ratio/diff/acceleration)."""
+        out_df = df_in.sort_values(["ticker", "date"]).copy()
+        sigma_t_col = "garch_sigma_t"
+        sigma_h_col = f"garch_sigma_fwd_h{cfg.horizon}"
+        if sigma_t_col not in out_df.columns or sigma_h_col not in out_df.columns:
+            return out_df
+
+        delta_col = f"garch_delta_sigma_h{cfg.horizon}"
+        ratio_col = f"garch_ratio_sigma_h{cfg.horizon}"
+        diff_col = "garch_sigma_t_diff1"
+        accel_col = "garch_sigma_t_diff2"
+
+        out_df[delta_col] = out_df[sigma_h_col] - out_df[sigma_t_col]
+        out_df[ratio_col] = out_df[sigma_h_col] / out_df[sigma_t_col].replace(0.0, np.nan)
+        out_df[diff_col] = out_df.groupby("ticker")[sigma_t_col].diff(1)
+        out_df[accel_col] = out_df.groupby("ticker")[diff_col].diff(1)
+        return out_df
+
     if cfg.use_sarimax_garch_chain:
         print("Fitting chained SARIMAX->GARCH models on training data...")
 
@@ -317,6 +337,7 @@ def make_dataset(cfg: DatasetConfig) -> dict:
 
         print("Generating chained GARCH features for all rows (train/valid/test) ...")
         combined = make_garch_features(combined, fitted_garch_chain, garch_cfg_chain)
+        combined = _append_garch_dynamic_features(combined)
 
         garch_cols = [
             "garch_sigma_t",
@@ -326,6 +347,10 @@ def make_dataset(cfg: DatasetConfig) -> dict:
             f"garch_sigma_rms_h{cfg.horizon}",
             "garch_resid",
             "garch_z",
+            f"garch_delta_sigma_h{cfg.horizon}",
+            f"garch_ratio_sigma_h{cfg.horizon}",
+            "garch_sigma_t_diff1",
+            "garch_sigma_t_diff2",
         ]
         for c in garch_cols:
             if c in combined.columns and c not in feature_cols:
@@ -398,9 +423,14 @@ def make_dataset(cfg: DatasetConfig) -> dict:
             f"garch_sigma_rms_h{cfg.horizon}",
             "garch_resid",
             "garch_z",
+            f"garch_delta_sigma_h{cfg.horizon}",
+            f"garch_ratio_sigma_h{cfg.horizon}",
+            "garch_sigma_t_diff1",
+            "garch_sigma_t_diff2",
         ]
 
         combined = make_garch_features(combined, fitted_garch, garch_cfg)
+        combined = _append_garch_dynamic_features(combined)
 
         missing = [
             c for c in ["garch_sigma_t", f"garch_sigma_fwd_h{cfg.horizon}", f"garch_var_fwd_h{cfg.horizon}", "garch_resid", "garch_z"]
@@ -410,7 +440,7 @@ def make_dataset(cfg: DatasetConfig) -> dict:
             raise RuntimeError(f"GARCH columns not present after feature generation: {missing}")
 
         for c in garch_cols:
-            if c not in feature_cols:
+            if c in combined.columns and c not in feature_cols:
                 feature_cols.append(c)
 
     df_model = combined.copy()
