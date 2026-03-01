@@ -92,6 +92,27 @@ def _one_hot_probs(y: np.ndarray, n_classes: int) -> np.ndarray:
     return out
 
 
+def _blend_predict(
+    proba_chain: np.ndarray,
+    y_persist: np.ndarray,
+    alpha: float,
+    beta: float = 0.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    alpha_c = float(np.clip(alpha, 0.0, 1.0))
+    beta_c = float(np.clip(beta, 0.0, 1.0))
+    p_persist = _one_hot_probs(y_persist, n_classes=int(proba_chain.shape[1]))
+
+    if beta_c <= 0.0:
+        alpha_vec = np.full(len(proba_chain), alpha_c, dtype=float)
+    else:
+        conf = np.max(proba_chain, axis=1).astype(float)
+        alpha_vec = np.clip((1.0 - beta_c) * alpha_c + beta_c * conf, 0.0, 1.0)
+
+    p_mix = alpha_vec[:, None] * proba_chain + (1.0 - alpha_vec[:, None]) * p_persist
+    pred = np.argmax(p_mix, axis=1).astype(int)
+    return pred, alpha_vec
+
+
 def _aligned_split_with_persistence(pack: dict[str, Any], split_name: str, horizon: int) -> dict[str, Any]:
     df_all = pack["df"][["ticker", "date", "regime"]].copy()
     df_all["persist_pred"] = persistence_pred_from_regime(df_all, horizon=horizon, regime_col="regime")
@@ -277,8 +298,9 @@ def _eval_best_chain_from_walkforward(
     model = make_xgb_model(model_cfg)
     fit_xgb(model, x_train, y_train, X_valid=x_valid_full, y_valid=y_valid_full)
 
-    blend_alpha = float(best.get("mean_selected_alpha", 1.0))
+    blend_alpha = float(best.get("oof_selected_alpha", best.get("mean_selected_alpha", 1.0)))
     blend_alpha = float(np.clip(blend_alpha, 0.0, 1.0))
+    blend_beta = float(np.clip(best.get("oof_selected_beta", 0.0), 0.0, 1.0))
     model_name = "Best_ChainBlend_from_WF"
 
     rows = []
@@ -290,12 +312,12 @@ def _eval_best_chain_from_walkforward(
         y_persist = aligned["y_persist"]
 
         p_chain = predict_proba_xgb(model, x_eval)
-        if blend_alpha < 1.0:
-            p_persist = _one_hot_probs(y_persist, n_classes=p_chain.shape[1])
-            p_eval = blend_alpha * p_chain + (1.0 - blend_alpha) * p_persist
-            pred_eval = np.argmax(p_eval, axis=1).astype(int)
-        else:
-            pred_eval = np.argmax(p_chain, axis=1).astype(int)
+        pred_eval, alpha_vec = _blend_predict(
+            proba_chain=p_chain,
+            y_persist=y_persist,
+            alpha=blend_alpha,
+            beta=blend_beta,
+        )
 
         rows.append(
             _metrics_record(
@@ -304,7 +326,11 @@ def _eval_best_chain_from_walkforward(
                 split_name,
                 y_eval,
                 pred_eval,
-                extra={"blend_alpha": blend_alpha},
+                extra={
+                    "blend_alpha": blend_alpha,
+                    "blend_beta": blend_beta,
+                    "mean_effective_alpha": float(np.mean(alpha_vec) if len(alpha_vec) else blend_alpha),
+                },
             )
         )
     return rows

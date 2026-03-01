@@ -59,7 +59,7 @@ for asset in "${ASSETS[@]}"; do
     --outdir "$asset_out"
 done
 
-env OUTDIR="$OUTDIR" python - <<'PY'
+env OUTDIR="$OUTDIR" .venv/bin/python - <<'PY'
 import os
 from pathlib import Path
 import pandas as pd
@@ -114,7 +114,7 @@ with report.open("w", encoding="utf-8") as f:
         cmp_df = pd.read_csv(cmp_path)
         f.write("\n## Test Metrics\n\n")
         cols = [c for c in ["asset", "model", "horizon", "accuracy", "macro_f1", "weighted_f1", "n_eval"] if c in cmp_df.columns]
-        f.write(cmp_df[cols].to_markdown(index=False))
+        f.write(cmp_df[cols].to_string(index=False))
         f.write("\n")
     if imp_path.exists():
         imp_df = pd.read_csv(imp_path)
@@ -133,7 +133,7 @@ with report.open("w", encoding="utf-8") as f:
             ]
             if c in imp_df.columns
         ]
-        f.write(imp_df[cols].to_markdown(index=False))
+        f.write(imp_df[cols].to_string(index=False))
         f.write("\n")
 print(f"[OK] Consolidated files written to: {outdir}")
 PY

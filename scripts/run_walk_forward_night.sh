@@ -53,6 +53,7 @@ PRUNE_DELTA_THRESHOLD="${PRUNE_DELTA_THRESHOLD:--0.01}"
 XGB_N_JOBS="${XGB_N_JOBS:-1}"
 MIN_HIGH_VOL_RECALL_DELTA="${MIN_HIGH_VOL_RECALL_DELTA:-0.0}"
 BLEND_ALPHAS="${BLEND_ALPHAS:-0.0,0.2,0.4,0.6,0.8,1.0}"
+BLEND_CONF_BETAS="${BLEND_CONF_BETAS:-0.0,0.25,0.5,0.75,1.0}"
 
 for h in "${horizons[@]}"; do
   echo "[INFO] Starting horizon h=${h} with up to ${MAX_PARALLEL_ASSETS} assets in parallel"
@@ -86,6 +87,7 @@ for h in "${horizons[@]}"; do
         --xgb_n_jobs "${XGB_N_JOBS}" \
         --use_blend \
         --blend_alphas "${BLEND_ALPHAS}" \
+        --blend_conf_betas "${BLEND_CONF_BETAS}" \
         --outdir "$OUT_ROOT" &
     pids+=("$!")
     running=$((running + 1))
@@ -139,9 +141,13 @@ if all_rows:
         rep.write("- Scope: per-asset (^GSPC, BTC-USD, TLT), horizons h=5 and h=20\n")
         rep.write("- Selection: robust score (delta vs persistence + stability penalties)\n\n")
         rep.write("## Final vs Persistence (Test)\n\n")
-        rep.write(final[[
+        preferred_cols = [
             "asset",
             "horizon",
+            "selected_struct_id",
+            "selected_xgb_id",
+            "selected_blend_alpha",
+            "selected_blend_beta",
             "chain_test_acc",
             "chain_test_macro_f1",
             "chain_test_weighted_f1",
@@ -151,9 +157,10 @@ if all_rows:
             "delta_test_acc_vs_persistence",
             "delta_test_macro_f1_vs_persistence",
             "delta_test_weighted_f1_vs_persistence",
-            "selected_experiment_id",
             "n_features",
-        ]].to_markdown(index=False))
+        ]
+        cols = [c for c in preferred_cols if c in final.columns]
+        rep.write(final[cols].to_string(index=False))
         rep.write("\n\n## Notes\n\n")
         rep.write("- Positive `delta_test_macro_f1_vs_persistence` means chain beats persistence.\n")
         rep.write("- Detailed fold metrics and summaries are under each `h*/asset_*` folder.\n")

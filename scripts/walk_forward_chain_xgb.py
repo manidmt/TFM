@@ -226,7 +226,7 @@ def _one_hot_probs(y: np.ndarray, n_classes: int) -> np.ndarray:
     return out
 
 
-def _parse_blend_alphas(spec: str) -> tuple[float, ...]:
+def _parse_unit_interval_list(spec: str, *, name: str) -> tuple[float, ...]:
     vals: list[float] = []
     for tok in str(spec).split(","):
         tok = tok.strip()
@@ -234,11 +234,19 @@ def _parse_blend_alphas(spec: str) -> tuple[float, ...]:
             continue
         v = float(tok)
         if v < 0.0 or v > 1.0:
-            raise ValueError(f"blend alpha must be in [0,1], got {v}")
+            raise ValueError(f"{name} value must be in [0,1], got {v}")
         vals.append(v)
     if not vals:
-        raise ValueError("blend_alphas is empty")
+        raise ValueError(f"{name} is empty")
     return tuple(sorted(set(vals)))
+
+
+def _parse_blend_alphas(spec: str) -> tuple[float, ...]:
+    return _parse_unit_interval_list(spec, name="blend_alphas")
+
+
+def _parse_blend_conf_betas(spec: str) -> tuple[float, ...]:
+    return _parse_unit_interval_list(spec, name="blend_conf_betas")
 
 
 def _aligned_split_with_persistence(
@@ -281,6 +289,62 @@ def _persist_metrics(df_all: pd.DataFrame, split_df: pd.DataFrame, horizon: int)
     return aligned["metrics"]
 
 
+def _blend_predict(
+    proba_chain: np.ndarray,
+    y_persist: np.ndarray,
+    alpha: float,
+    beta: float = 0.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    alpha_c = float(np.clip(alpha, 0.0, 1.0))
+    beta_c = float(np.clip(beta, 0.0, 1.0))
+    persist_proba = _one_hot_probs(y_persist, n_classes=int(proba_chain.shape[1]))
+
+    if beta_c <= 0.0:
+        alpha_vec = np.full(len(proba_chain), alpha_c, dtype=float)
+    else:
+        # Confidence proxy from chain probabilities: max class probability.
+        conf = np.max(proba_chain, axis=1).astype(float)
+        alpha_vec = np.clip((1.0 - beta_c) * alpha_c + beta_c * conf, 0.0, 1.0)
+
+    p_mix = alpha_vec[:, None] * proba_chain + (1.0 - alpha_vec[:, None]) * persist_proba
+    pred = np.argmax(p_mix, axis=1).astype(int)
+    return pred, alpha_vec
+
+
+def _blend_metrics(
+    *,
+    proba_chain: np.ndarray,
+    y_true: np.ndarray,
+    y_persist: np.ndarray,
+    persist_metrics: dict[str, float],
+    alpha: float,
+    beta: float = 0.0,
+) -> dict[str, float]:
+    pred, alpha_vec = _blend_predict(
+        proba_chain=proba_chain,
+        y_persist=y_persist,
+        alpha=alpha,
+        beta=beta,
+    )
+    m = compute_metrics(y_true, pred)
+    high_vol_recall = _high_vol_recall(m)
+    return {
+        "acc": float(m.accuracy),
+        "macro_f1": float(m.macro_f1),
+        "weighted_f1": float(m.weighted_f1),
+        "macro_recall": float(m.macro_recall),
+        "high_vol_recall": float(high_vol_recall),
+        "delta_acc_vs_persistence": float(m.accuracy - persist_metrics["acc"]),
+        "delta_macro_f1_vs_persistence": float(m.macro_f1 - persist_metrics["macro_f1"]),
+        "delta_weighted_f1_vs_persistence": float(m.weighted_f1 - persist_metrics["weighted_f1"]),
+        "delta_macro_recall_vs_persistence": float(m.macro_recall - persist_metrics["macro_recall"]),
+        "delta_high_vol_recall_vs_persistence": float(
+            high_vol_recall - persist_metrics["high_vol_recall"]
+        ),
+        "mean_effective_alpha": float(np.mean(alpha_vec) if len(alpha_vec) else alpha),
+    }
+
+
 def _pick_best_blend_alpha(
     proba_chain: np.ndarray,
     y_true: np.ndarray,
@@ -288,35 +352,18 @@ def _pick_best_blend_alpha(
     blend_alphas: tuple[float, ...],
     persist_metrics: dict[str, float],
 ) -> tuple[float, dict[str, float]]:
-    n_classes = int(proba_chain.shape[1])
-    persist_proba = _one_hot_probs(y_persist, n_classes=n_classes)
-
     best_alpha = float(blend_alphas[-1])
     best_metrics: dict[str, float] | None = None
     best_score: tuple[float, float, float] | None = None
     for alpha in blend_alphas:
-        p_mix = float(alpha) * proba_chain + (1.0 - float(alpha)) * persist_proba
-        pred = np.argmax(p_mix, axis=1).astype(int)
-        m = compute_metrics(y_true, pred)
-        high_vol_recall = _high_vol_recall(m)
-        cand = {
-            "acc": float(m.accuracy),
-            "macro_f1": float(m.macro_f1),
-            "weighted_f1": float(m.weighted_f1),
-            "macro_recall": float(m.macro_recall),
-            "high_vol_recall": float(high_vol_recall),
-            "delta_acc_vs_persistence": float(m.accuracy - persist_metrics["acc"]),
-            "delta_macro_f1_vs_persistence": float(m.macro_f1 - persist_metrics["macro_f1"]),
-            "delta_weighted_f1_vs_persistence": float(
-                m.weighted_f1 - persist_metrics["weighted_f1"]
-            ),
-            "delta_macro_recall_vs_persistence": float(
-                m.macro_recall - persist_metrics["macro_recall"]
-            ),
-            "delta_high_vol_recall_vs_persistence": float(
-                high_vol_recall - persist_metrics["high_vol_recall"]
-            ),
-        }
+        cand = _blend_metrics(
+            proba_chain=proba_chain,
+            y_true=y_true,
+            y_persist=y_persist,
+            persist_metrics=persist_metrics,
+            alpha=float(alpha),
+            beta=0.0,
+        )
         score = (
             cand["delta_macro_f1_vs_persistence"],
             cand["delta_high_vol_recall_vs_persistence"],
@@ -328,6 +375,39 @@ def _pick_best_blend_alpha(
             best_metrics = cand
     assert best_metrics is not None
     return best_alpha, best_metrics
+
+
+def _pick_best_blend_beta(
+    proba_chain: np.ndarray,
+    y_true: np.ndarray,
+    y_persist: np.ndarray,
+    alpha: float,
+    blend_conf_betas: tuple[float, ...],
+    persist_metrics: dict[str, float],
+) -> tuple[float, dict[str, float]]:
+    best_beta = float(blend_conf_betas[0])
+    best_metrics: dict[str, float] | None = None
+    best_score: tuple[float, float, float] | None = None
+    for beta in blend_conf_betas:
+        cand = _blend_metrics(
+            proba_chain=proba_chain,
+            y_true=y_true,
+            y_persist=y_persist,
+            persist_metrics=persist_metrics,
+            alpha=float(alpha),
+            beta=float(beta),
+        )
+        score = (
+            cand["delta_macro_f1_vs_persistence"],
+            cand["delta_high_vol_recall_vs_persistence"],
+            cand["acc"],
+        )
+        if best_score is None or score > best_score:
+            best_score = score
+            best_beta = float(beta)
+            best_metrics = cand
+    assert best_metrics is not None
+    return best_beta, best_metrics
 
 
 def _cache_key(asset: str, horizon: int, train_end: str, valid_end: str, struct_cfg: dict[str, Any]) -> str:
@@ -461,6 +541,7 @@ def _fit_eval_xgb(
     xgb_n_jobs: int,
     use_blend: bool,
     blend_alphas: tuple[float, ...],
+    blend_conf_betas: tuple[float, ...],
 ) -> dict[str, Any]:
     cfg = XGBConfig(
         n_estimators=int(xgb_cfg["n_estimators"]),
@@ -483,48 +564,44 @@ def _fit_eval_xgb(
         y_valid=fold_data["y_valid"],
     )
     proba_valid = predict_proba_xgb(model, fold_data["x_valid"])
+    persist_metrics = {
+        "acc": fold_data["persist_valid_acc"],
+        "macro_f1": fold_data["persist_valid_macro_f1"],
+        "weighted_f1": fold_data["persist_valid_weighted_f1"],
+        "macro_recall": fold_data["persist_valid_macro_recall"],
+        "high_vol_recall": fold_data["persist_valid_high_vol_recall"],
+    }
     if bool(use_blend):
         selected_alpha, best_m = _pick_best_blend_alpha(
             proba_chain=proba_valid,
             y_true=fold_data["y_valid"],
             y_persist=fold_data["persist_valid_pred"],
             blend_alphas=blend_alphas,
-            persist_metrics={
-                "acc": fold_data["persist_valid_acc"],
-                "macro_f1": fold_data["persist_valid_macro_f1"],
-                "weighted_f1": fold_data["persist_valid_weighted_f1"],
-                "macro_recall": fold_data["persist_valid_macro_recall"],
-                "high_vol_recall": fold_data["persist_valid_high_vol_recall"],
-            },
+            persist_metrics=persist_metrics,
+        )
+        selected_beta, best_m = _pick_best_blend_beta(
+            proba_chain=proba_valid,
+            y_true=fold_data["y_valid"],
+            y_persist=fold_data["persist_valid_pred"],
+            alpha=float(selected_alpha),
+            blend_conf_betas=blend_conf_betas,
+            persist_metrics=persist_metrics,
         )
     else:
         selected_alpha = 1.0
-        pred_chain = np.argmax(proba_valid, axis=1).astype(int)
-        m_chain = compute_metrics(fold_data["y_valid"], pred_chain)
-        high_vol_recall = _high_vol_recall(m_chain)
-        best_m = {
-            "acc": float(m_chain.accuracy),
-            "macro_f1": float(m_chain.macro_f1),
-            "weighted_f1": float(m_chain.weighted_f1),
-            "macro_recall": float(m_chain.macro_recall),
-            "high_vol_recall": float(high_vol_recall),
-            "delta_acc_vs_persistence": float(m_chain.accuracy - fold_data["persist_valid_acc"]),
-            "delta_macro_f1_vs_persistence": float(
-                m_chain.macro_f1 - fold_data["persist_valid_macro_f1"]
-            ),
-            "delta_weighted_f1_vs_persistence": float(
-                m_chain.weighted_f1 - fold_data["persist_valid_weighted_f1"]
-            ),
-            "delta_macro_recall_vs_persistence": float(
-                m_chain.macro_recall - fold_data["persist_valid_macro_recall"]
-            ),
-            "delta_high_vol_recall_vs_persistence": float(
-                high_vol_recall - fold_data["persist_valid_high_vol_recall"]
-            ),
-        }
+        selected_beta = 0.0
+        best_m = _blend_metrics(
+            proba_chain=proba_valid,
+            y_true=fold_data["y_valid"],
+            y_persist=fold_data["persist_valid_pred"],
+            persist_metrics=persist_metrics,
+            alpha=1.0,
+            beta=0.0,
+        )
 
     return {
         "selected_alpha": float(selected_alpha),
+        "selected_beta": float(selected_beta),
         "valid_acc": float(best_m["acc"]),
         "valid_macro_f1": float(best_m["macro_f1"]),
         "valid_weighted_f1": float(best_m["weighted_f1"]),
@@ -537,8 +614,17 @@ def _fit_eval_xgb(
         "delta_high_vol_recall_vs_persistence": float(
             best_m["delta_high_vol_recall_vs_persistence"]
         ),
+        "mean_effective_alpha": float(best_m["mean_effective_alpha"]),
         "n_features": int(fold_data["n_features"]),
         "n_valid": int(len(fold_data["y_valid"])),
+        "persist_valid_acc": float(fold_data["persist_valid_acc"]),
+        "persist_valid_macro_f1": float(fold_data["persist_valid_macro_f1"]),
+        "persist_valid_weighted_f1": float(fold_data["persist_valid_weighted_f1"]),
+        "persist_valid_macro_recall": float(fold_data["persist_valid_macro_recall"]),
+        "persist_valid_high_vol_recall": float(fold_data["persist_valid_high_vol_recall"]),
+        "proba_valid": proba_valid,
+        "y_valid": np.asarray(fold_data["y_valid"], dtype=int),
+        "persist_valid_pred": np.asarray(fold_data["persist_valid_pred"], dtype=int),
     }
 
 
@@ -555,6 +641,7 @@ def _official_test_compare(
     xgb_n_jobs: int,
     use_blend: bool,
     blend_alpha: float,
+    blend_beta: float,
 ) -> dict[str, Any]:
     dcfg = DatasetConfig(
         db_path=db_path,
@@ -607,15 +694,28 @@ def _official_test_compare(
     proba_test = predict_proba_xgb(model, x_test_eval)
     if bool(use_blend):
         alpha = float(np.clip(blend_alpha, 0.0, 1.0))
-        persist_proba = _one_hot_probs(y_persist_test, n_classes=proba_test.shape[1])
-        pred_test = np.argmax(alpha * proba_test + (1.0 - alpha) * persist_proba, axis=1).astype(int)
+        beta = float(np.clip(blend_beta, 0.0, 1.0))
+        pred_test, alpha_vec = _blend_predict(
+            proba_chain=proba_test,
+            y_persist=y_persist_test,
+            alpha=alpha,
+            beta=beta,
+        )
     else:
         alpha = 1.0
-        pred_test = np.argmax(proba_test, axis=1).astype(int)
+        beta = 0.0
+        pred_test, alpha_vec = _blend_predict(
+            proba_chain=proba_test,
+            y_persist=y_persist_test,
+            alpha=alpha,
+            beta=beta,
+        )
     m_chain = compute_metrics(y_test_eval, pred_test)
     chain_high_vol_recall = _high_vol_recall(m_chain)
     return {
         "selected_blend_alpha": alpha,
+        "selected_blend_beta": beta,
+        "mean_effective_alpha_test": float(np.mean(alpha_vec) if len(alpha_vec) else alpha),
         "chain_test_acc": float(m_chain.accuracy),
         "chain_test_macro_f1": float(m_chain.macro_f1),
         "chain_test_weighted_f1": float(m_chain.weighted_f1),
@@ -678,6 +778,11 @@ def main() -> int:
         default="0.0,0.2,0.4,0.6,0.8,1.0",
         help="Comma-separated blend weights alpha for chain probs in alpha*chain + (1-alpha)*persistence.",
     )
+    parser.add_argument(
+        "--blend_conf_betas",
+        default="0.0,0.25,0.5,0.75,1.0",
+        help="Comma-separated confidence blend betas. beta=0 means constant alpha; beta>0 adapts alpha by chain confidence.",
+    )
     parser.add_argument("--disable_cache", action="store_true")
     parser.add_argument("--per_ticker", action="store_true")
     parser.add_argument(
@@ -688,6 +793,7 @@ def main() -> int:
     )
     args = parser.parse_args()
     blend_alphas = _parse_blend_alphas(args.blend_alphas)
+    blend_conf_betas = _parse_blend_conf_betas(args.blend_conf_betas)
 
     features_cfg = load_yaml(args.config_features)
     sources_cfg = load_yaml(args.config_sources)
@@ -763,8 +869,14 @@ def main() -> int:
                             xgb_n_jobs=int(args.xgb_n_jobs),
                             use_blend=bool(args.use_blend),
                             blend_alphas=blend_alphas,
+                            blend_conf_betas=blend_conf_betas,
                         )
                         combo_metrics[x_idx].append(res)
+                        res_row = {
+                            k: v
+                            for k, v in res.items()
+                            if k not in {"proba_valid", "y_valid", "persist_valid_pred"}
+                        }
                         fold_rows.append(
                             {
                                 "asset": asset_name,
@@ -776,7 +888,7 @@ def main() -> int:
                                 "valid_end": valid_end,
                                 **s_cfg,
                                 **xgb_cfgs[x_idx],
-                                **res,
+                                **res_row,
                             }
                         )
                     except Exception as e:
@@ -817,22 +929,90 @@ def main() -> int:
             for x_idx, rows in combo_metrics.items():
                 if not rows:
                     continue
-                macro_series = np.array([r["valid_macro_f1"] for r in rows], dtype=float)
-                weighted_series = np.array([r["valid_weighted_f1"] for r in rows], dtype=float)
-                macro_recall_series = np.array([r["valid_macro_recall"] for r in rows], dtype=float)
-                high_vol_recall_series = np.array([r["valid_high_vol_recall"] for r in rows], dtype=float)
-                delta_series = np.array([r["delta_macro_f1_vs_persistence"] for r in rows], dtype=float)
+                alpha_series_fold = np.array([r["selected_alpha"] for r in rows], dtype=float)
+                beta_series_fold = np.array([r["selected_beta"] for r in rows], dtype=float)
+                eff_alpha_series_fold = np.array([r["mean_effective_alpha"] for r in rows], dtype=float)
+
+                oof_proba = np.vstack([np.asarray(r["proba_valid"], dtype=float) for r in rows])
+                oof_y = np.concatenate([np.asarray(r["y_valid"], dtype=int) for r in rows]).astype(int)
+                oof_persist = np.concatenate(
+                    [np.asarray(r["persist_valid_pred"], dtype=int) for r in rows]
+                ).astype(int)
+                m_oof_persist = compute_metrics(oof_y, oof_persist)
+                oof_persist_metrics = {
+                    "acc": float(m_oof_persist.accuracy),
+                    "macro_f1": float(m_oof_persist.macro_f1),
+                    "weighted_f1": float(m_oof_persist.weighted_f1),
+                    "macro_recall": float(m_oof_persist.macro_recall),
+                    "high_vol_recall": _high_vol_recall(m_oof_persist),
+                }
+
+                if bool(args.use_blend):
+                    oof_selected_alpha, _ = _pick_best_blend_alpha(
+                        proba_chain=oof_proba,
+                        y_true=oof_y,
+                        y_persist=oof_persist,
+                        blend_alphas=blend_alphas,
+                        persist_metrics=oof_persist_metrics,
+                    )
+                    oof_selected_beta, oof_best_m = _pick_best_blend_beta(
+                        proba_chain=oof_proba,
+                        y_true=oof_y,
+                        y_persist=oof_persist,
+                        alpha=float(oof_selected_alpha),
+                        blend_conf_betas=blend_conf_betas,
+                        persist_metrics=oof_persist_metrics,
+                    )
+                else:
+                    oof_selected_alpha = 1.0
+                    oof_selected_beta = 0.0
+                    oof_best_m = _blend_metrics(
+                        proba_chain=oof_proba,
+                        y_true=oof_y,
+                        y_persist=oof_persist,
+                        persist_metrics=oof_persist_metrics,
+                        alpha=1.0,
+                        beta=0.0,
+                    )
+
+                fold_eval_metrics = []
+                for r in rows:
+                    fold_persist = {
+                        "acc": float(r["persist_valid_acc"]),
+                        "macro_f1": float(r["persist_valid_macro_f1"]),
+                        "weighted_f1": float(r["persist_valid_weighted_f1"]),
+                        "macro_recall": float(r["persist_valid_macro_recall"]),
+                        "high_vol_recall": float(r["persist_valid_high_vol_recall"]),
+                    }
+                    fm = _blend_metrics(
+                        proba_chain=np.asarray(r["proba_valid"], dtype=float),
+                        y_true=np.asarray(r["y_valid"], dtype=int),
+                        y_persist=np.asarray(r["persist_valid_pred"], dtype=int),
+                        persist_metrics=fold_persist,
+                        alpha=float(oof_selected_alpha),
+                        beta=float(oof_selected_beta),
+                    )
+                    fold_eval_metrics.append(fm)
+
+                acc_series = np.array([m["acc"] for m in fold_eval_metrics], dtype=float)
+                macro_series = np.array([m["macro_f1"] for m in fold_eval_metrics], dtype=float)
+                weighted_series = np.array([m["weighted_f1"] for m in fold_eval_metrics], dtype=float)
+                macro_recall_series = np.array([m["macro_recall"] for m in fold_eval_metrics], dtype=float)
+                high_vol_recall_series = np.array(
+                    [m["high_vol_recall"] for m in fold_eval_metrics], dtype=float
+                )
+                delta_series = np.array(
+                    [m["delta_macro_f1_vs_persistence"] for m in fold_eval_metrics], dtype=float
+                )
                 delta_weighted_series = np.array(
-                    [r["delta_weighted_f1_vs_persistence"] for r in rows], dtype=float
+                    [m["delta_weighted_f1_vs_persistence"] for m in fold_eval_metrics], dtype=float
                 )
                 delta_macro_recall_series = np.array(
-                    [r["delta_macro_recall_vs_persistence"] for r in rows], dtype=float
+                    [m["delta_macro_recall_vs_persistence"] for m in fold_eval_metrics], dtype=float
                 )
                 delta_high_vol_recall_series = np.array(
-                    [r["delta_high_vol_recall_vs_persistence"] for r in rows], dtype=float
+                    [m["delta_high_vol_recall_vs_persistence"] for m in fold_eval_metrics], dtype=float
                 )
-                acc_series = np.array([r["valid_acc"] for r in rows], dtype=float)
-                alpha_series = np.array([r["selected_alpha"] for r in rows], dtype=float)
 
                 positive_rate = float(np.mean(delta_series > 0.0))
                 stability_penalty = float(args.stability_lambda) * float(np.std(delta_series))
@@ -849,7 +1029,23 @@ def main() -> int:
                         **s_cfg,
                         **xgb_cfgs[x_idx],
                         "n_folds_ok": int(len(rows)),
-                        "mean_selected_alpha": float(np.mean(alpha_series)),
+                        "mean_selected_alpha": float(np.mean(alpha_series_fold)),
+                        "mean_selected_beta": float(np.mean(beta_series_fold)),
+                        "mean_effective_alpha_fold": float(np.mean(eff_alpha_series_fold)),
+                        "oof_selected_alpha": float(oof_selected_alpha),
+                        "oof_selected_beta": float(oof_selected_beta),
+                        "oof_mean_effective_alpha": float(oof_best_m["mean_effective_alpha"]),
+                        "oof_valid_acc": float(oof_best_m["acc"]),
+                        "oof_valid_macro_f1": float(oof_best_m["macro_f1"]),
+                        "oof_valid_weighted_f1": float(oof_best_m["weighted_f1"]),
+                        "oof_valid_macro_recall": float(oof_best_m["macro_recall"]),
+                        "oof_valid_high_vol_recall": float(oof_best_m["high_vol_recall"]),
+                        "oof_delta_macro_vs_persistence": float(
+                            oof_best_m["delta_macro_f1_vs_persistence"]
+                        ),
+                        "oof_delta_high_vol_recall_vs_persistence": float(
+                            oof_best_m["delta_high_vol_recall_vs_persistence"]
+                        ),
                         "mean_valid_acc": float(np.mean(acc_series)),
                         "mean_valid_macro_f1": float(np.mean(macro_series)),
                         "mean_valid_weighted_f1": float(np.mean(weighted_series)),
@@ -934,7 +1130,8 @@ def main() -> int:
             },
             xgb_n_jobs=int(args.xgb_n_jobs),
             use_blend=bool(args.use_blend),
-            blend_alpha=float(best.get("mean_selected_alpha", 1.0)),
+            blend_alpha=float(best.get("oof_selected_alpha", best.get("mean_selected_alpha", 1.0))),
+            blend_beta=float(best.get("oof_selected_beta", 0.0)),
         )
         final_compare_rows.append(
             {
