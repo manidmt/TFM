@@ -29,6 +29,7 @@ matplotlib = "^3.8.0"
 pandas-datareader = "^0.10.0"
 xgboost = "^3.2.0"
 pytorch-tabnet = "^4.1.0"
+tabpfn = "^6.4.1"
 
 [tool.poetry.group.dev.dependencies]
 jupyterlab = "^4.1.0"
