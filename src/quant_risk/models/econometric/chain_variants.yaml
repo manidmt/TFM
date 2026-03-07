@@ -1,0 +1,66 @@
+chain:
+  description: "Structural variants for SARIMAX->GARCH chain walk-forward."
+  schema_version: 1
+
+profiles:
+  promising:
+    - sarimax_order: [2, 0, 1]
+      sarimax_chain_exog_cols: ["net_liquidity_diff"]
+      garch_p: 2
+      garch_q: 2
+      garch_dist: "tstudent"
+      garch_chain_agg: "rms"
+      garch_scale: 100.0
+
+    - sarimax_order: [2, 0, 1]
+      sarimax_chain_exog_cols: ["net_liquidity_diff"]
+      garch_p: 1
+      garch_q: 2
+      garch_dist: "tstudent"
+      garch_chain_agg: "mean"
+      garch_scale: 80.0
+
+    - sarimax_order: [1, 0, 1]
+      sarimax_chain_exog_cols: []
+      garch_p: 1
+      garch_q: 1
+      garch_dist: "tstudent"
+      garch_chain_agg: "rms"
+      garch_scale: 100.0
+
+    - sarimax_order: [1, 0, 0]
+      sarimax_chain_exog_cols: ["net_liquidity_diff"]
+      garch_p: 1
+      garch_q: 1
+      garch_dist: "tstudent"
+      garch_chain_agg: "last"
+      garch_scale: 80.0
+
+    - sarimax_order: [2, 0, 1]
+      sarimax_chain_exog_cols: []
+      garch_p: 2
+      garch_q: 1
+      garch_dist: "tstudent"
+      garch_chain_agg: "rms"
+      garch_scale: 100.0
+
+    - sarimax_order: [1, 0, 1]
+      sarimax_chain_exog_cols: ["net_liquidity_diff"]
+      garch_p: 2
+      garch_q: 1
+      garch_dist: "tstudent"
+      garch_chain_agg: "mean"
+      garch_scale: 100.0
+
+  full_axes:
+    sarimax_order:
+      - [1, 0, 1]
+      - [2, 0, 1]
+    sarimax_chain_exog_cols:
+      - []
+      - ["net_liquidity_diff"]
+    garch_p: [1, 2]
+    garch_q: [1, 2]
+    garch_dist: ["tstudent"]
+    garch_chain_agg: ["rms", "mean"]
+    garch_scale: [80.0, 100.0]
