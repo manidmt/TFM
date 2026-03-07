@@ -144,15 +144,13 @@ def build_features(cfg: BuildFeaturesConfig, tickers: Iterable[str]) -> dict:
             for lag in cfg.return_lags:
                 sub[f"logret_lag{lag}"] = sub["logret"].shift(lag)
 
-            # realized vol proxies (rolling std of logret)
-            for w in cfg.rv_windows:
+            # Realized-vol proxies (rolling std of logret).
+            # Always compute the true 20-day series because downstream targets
+            # and engineered features assume rv_20 semantics.
+            rv_windows = {int(w) for w in cfg.rv_windows}
+            rv_windows.update({20, int(cfg.rv_long_window)})
+            for w in sorted(rv_windows):
                 sub[f"rv_{w}"] = sub["logret"].rolling(w).std()
-            sub[f"rv_{cfg.rv_long_window}"] = sub["logret"].rolling(cfg.rv_long_window).std()
-            if "rv_20" not in sub.columns:
-                # Keep downstream engineered features stable when custom rv_windows
-                # does not include 20.
-                fallback_w = int(cfg.rv_windows[0]) if cfg.rv_windows else int(cfg.rv_long_window)
-                sub["rv_20"] = sub[f"rv_{fallback_w}"]
 
             # Alias for long-horizon realized vol so it is available as model feature
             # even if raw rv_* columns are filtered in dataset inference.

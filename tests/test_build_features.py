@@ -10,6 +10,7 @@
 
 import duckdb
 import pandas as pd
+import numpy as np
 
 from quant_risk.features.build import BuildFeaturesConfig, build_features
 
@@ -118,3 +119,57 @@ def test_macro_publication_lag_is_applied(tmp_path):
     expected_date = check_date - pd.offsets.BDay(2)
     expected_vix = float(df_macro.loc[df_macro["date"] == expected_date, "vix"].iloc[0])
     assert float(out["vix"].iloc[0]) == expected_vix
+
+
+def test_rv20_is_true_window_even_if_not_requested(tmp_path):
+    db_path = tmp_path / "rv20_true_window.duckdb"
+    con = duckdb.connect(str(db_path))
+    try:
+        dates = pd.bdate_range("2021-01-01", periods=45)
+        close = [100.0 + 0.4 * i + (0.2 if i % 2 == 0 else -0.2) for i in range(len(dates))]
+        df_prices = pd.DataFrame(
+            {
+                "ticker": ["AAA"] * len(dates),
+                "date": dates,
+                "close": close,
+                "volume": [1000] * len(dates),
+            }
+        )
+        df_macro = pd.DataFrame(
+            {
+                "date": dates,
+                "vix": [20.0] * len(dates),
+            }
+        )
+        con.execute("CREATE TABLE raw_prices AS SELECT * FROM df_prices")
+        con.execute("CREATE TABLE macro_features AS SELECT * FROM df_macro")
+    finally:
+        con.close()
+
+    cfg = BuildFeaturesConfig(
+        db_path=str(db_path),
+        rv_windows=(2,),
+        return_lags=(1,),
+        macro_lags=(1,),
+    )
+    build_features(cfg, tickers=["AAA"])
+
+    con = duckdb.connect(str(db_path))
+    try:
+        out = con.execute(
+            """
+            SELECT date, rv_2, rv_20
+            FROM features_daily
+            WHERE ticker = 'AAA'
+            ORDER BY date
+            """
+        ).df()
+    finally:
+        con.close()
+
+    expected_rv20 = np.log(df_prices["close"]).diff().rolling(20).std().iloc[2:].reset_index(drop=True)
+    pd.testing.assert_series_equal(out["rv_20"].reset_index(drop=True), expected_rv20, check_names=False)
+
+    overlap = out["rv_2"].notna() & out["rv_20"].notna()
+    assert overlap.any()
+    assert (out.loc[overlap, "rv_20"] - out.loc[overlap, "rv_2"]).abs().gt(1e-12).any()
