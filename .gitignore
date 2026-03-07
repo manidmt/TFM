@@ -46,6 +46,7 @@ config.yaml
 
 # Runs
 /runs/
+.model_locks/
 
 # Reports
 /reports/
