@@ -46,3 +46,6 @@ config.yaml
 
 # Runs
 /runs/
+
+# Reports
+/reports/
