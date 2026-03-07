@@ -148,6 +148,11 @@ def build_features(cfg: BuildFeaturesConfig, tickers: Iterable[str]) -> dict:
             for w in cfg.rv_windows:
                 sub[f"rv_{w}"] = sub["logret"].rolling(w).std()
             sub[f"rv_{cfg.rv_long_window}"] = sub["logret"].rolling(cfg.rv_long_window).std()
+            if "rv_20" not in sub.columns:
+                # Keep downstream engineered features stable when custom rv_windows
+                # does not include 20.
+                fallback_w = int(cfg.rv_windows[0]) if cfg.rv_windows else int(cfg.rv_long_window)
+                sub["rv_20"] = sub[f"rv_{fallback_w}"]
 
             # Alias for long-horizon realized vol so it is available as model feature
             # even if raw rv_* columns are filtered in dataset inference.
