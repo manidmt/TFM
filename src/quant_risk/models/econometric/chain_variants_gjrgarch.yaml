@@ -9,6 +9,16 @@ profiles:
       garch_p: 1
       garch_o: 1
       garch_q: 1
+      garch_dist: "skewt"
+      garch_vol: "GJR-GARCH"
+      garch_chain_agg: "rms"
+      garch_scale: 100.0
+
+    - sarimax_order: [2, 0, 1]
+      sarimax_chain_exog_cols: ["net_liquidity_diff"]
+      garch_p: 1
+      garch_o: 1
+      garch_q: 1
       garch_dist: "tstudent"
       garch_vol: "GJR-GARCH"
       garch_chain_agg: "rms"
@@ -54,7 +64,7 @@ profiles:
     garch_p: [1, 2]
     garch_o: [1]
     garch_q: [1, 2]
-    garch_dist: ["tstudent"]
+    garch_dist: ["tstudent", "skewt"]
     garch_vol: ["GJR-GARCH"]
     garch_chain_agg: ["rms", "mean"]
     garch_scale: [80.0, 100.0]

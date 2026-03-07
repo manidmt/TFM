@@ -16,7 +16,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from arch.univariate import ConstantMean, GARCH, Normal, StudentsT, ZeroMean
+from arch.univariate import ConstantMean, GARCH, Normal, SkewStudent, StudentsT, ZeroMean
 
 logger = logging.getLogger(__name__)
 
@@ -57,10 +57,12 @@ def _build_mean_model(y: np.ndarray, cfg: GjrGarchConfig):
         model.distribution = Normal()
     elif dist_kind in {"t", "studentt", "student-t", "tstudent", "students_t"}:
         model.distribution = StudentsT()
+    elif dist_kind in {"skewt", "skew_t", "skew-t", "skewstudent", "skew_student"}:
+        model.distribution = SkewStudent()
     else:
         raise ValueError(
             f"Unsupported distribution dist='{cfg.dist}'. "
-            "Use 'normal' or 'tstudent'."
+            "Use 'normal', 'tstudent' or 'skewt'."
         )
     return model
 
