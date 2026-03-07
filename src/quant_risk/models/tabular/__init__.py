@@ -17,6 +17,13 @@ from .ft_transformer import (
     predict as predict_fttransformer,
     predict_proba as predict_proba_fttransformer,
 )
+from .tabpfn import (
+    TabPFNConfig,
+    make_model as make_tabpfn_model,
+    fit as fit_tabpfn,
+    predict as predict_tabpfn,
+    predict_proba as predict_proba_tabpfn,
+)
 
 __all__ = [
     "XGBConfig",
@@ -34,4 +41,9 @@ __all__ = [
     "fit_fttransformer",
     "predict_fttransformer",
     "predict_proba_fttransformer",
+    "TabPFNConfig",
+    "make_tabpfn_model",
+    "fit_tabpfn",
+    "predict_tabpfn",
+    "predict_proba_tabpfn",
 ]

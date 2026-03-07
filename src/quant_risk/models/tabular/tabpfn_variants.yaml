@@ -1,0 +1,56 @@
+tabpfn:
+  description: "TabPFN variant grid for walk-forward experiments."
+  schema_version: 1
+
+profiles:
+  promising:
+    - n_estimators: 1
+      softmax_temperature: 0.9
+      balance_probabilities: false
+      average_before_softmax: false
+      fit_mode: "fit_preprocessors"
+      memory_saving_mode: "auto"
+      ignore_pretraining_limits: true
+      inference_precision: "auto"
+      random_state: 42
+
+    - n_estimators: 4
+      softmax_temperature: 0.9
+      balance_probabilities: false
+      average_before_softmax: false
+      fit_mode: "fit_preprocessors"
+      memory_saving_mode: "auto"
+      ignore_pretraining_limits: true
+      inference_precision: "auto"
+      random_state: 42
+
+  full:
+    - n_estimators: 1
+      softmax_temperature: 0.9
+      balance_probabilities: false
+      average_before_softmax: false
+      fit_mode: "fit_preprocessors"
+      memory_saving_mode: "auto"
+      ignore_pretraining_limits: true
+      inference_precision: "auto"
+      random_state: 42
+
+    - n_estimators: 4
+      softmax_temperature: 0.9
+      balance_probabilities: false
+      average_before_softmax: false
+      fit_mode: "fit_preprocessors"
+      memory_saving_mode: "auto"
+      ignore_pretraining_limits: true
+      inference_precision: "auto"
+      random_state: 42
+
+    - n_estimators: 8
+      softmax_temperature: 0.8
+      balance_probabilities: false
+      average_before_softmax: false
+      fit_mode: "fit_preprocessors"
+      memory_saving_mode: "auto"
+      ignore_pretraining_limits: true
+      inference_precision: "auto"
+      random_state: 42
