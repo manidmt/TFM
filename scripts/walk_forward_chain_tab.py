@@ -174,6 +174,17 @@ def make_structural_configs(profile: str, variants_path: str = DEFAULT_CHAIN_VAR
                 "garch_p": 2,
                 "garch_o": 1,
                 "garch_q": 2,
+                "garch_dist": "skewt",
+                "garch_vol": "Garch",
+                "garch_chain_agg": "rms",
+                "garch_scale": 100.0,
+            },
+            {
+                "sarimax_order": (2, 0, 1),
+                "sarimax_chain_exog_cols": ("net_liquidity_diff",),
+                "garch_p": 2,
+                "garch_o": 1,
+                "garch_q": 2,
                 "garch_dist": "tstudent",
                 "garch_vol": "Garch",
                 "garch_chain_agg": "rms",
@@ -241,7 +252,7 @@ def make_structural_configs(profile: str, variants_path: str = DEFAULT_CHAIN_VAR
     p_vals = [1, 2]
     o_vals = [1]
     q_vals = [1, 2]
-    dists = ["tstudent"]
+    dists = ["tstudent", "skewt"]
     vols = ["Garch"]
     aggs = ["rms", "mean"]
     scales = [80.0, 100.0]
