@@ -12,6 +12,8 @@ env/
 Thumbs.db
 poetry.lock
 
+*.sh
+
 # Data:
 /data/raw/*
 /data/processed/*
