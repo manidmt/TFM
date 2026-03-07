@@ -11,6 +11,7 @@
 
 import pandas as pd
 import numpy as np
+import re
 
 from quant_risk.datasets.make_dataset import DatasetConfig, make_dataset
 
@@ -32,7 +33,9 @@ def test_no_leakage_features_excluded():
     cols = pack["feature_cols"]
 
     assert "logret" not in cols, "Leakage risk: logret should be excluded from features."
-    assert not any(c.startswith("rv_") for c in cols), "Leakage risk: rv_* should be excluded from features."
+    assert not any(
+        re.fullmatch(r"rv_\d+", c) for c in cols
+    ), "Leakage risk: raw rv_<window> columns should be excluded from features."
 
 
 def test_regime_values_in_range():

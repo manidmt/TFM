@@ -66,6 +66,7 @@ def _metrics_record(
     split_name: str,
     y_true,
     y_pred,
+    target_view: str = "regime",
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     m = compute_metrics(y_true, y_pred)
@@ -73,6 +74,7 @@ def _metrics_record(
         "model": model_name,
         "horizon": int(horizon),
         "split": split_name,
+        "target_view": str(target_view),
         "accuracy": float(m.accuracy),
         "macro_f1": float(m.macro_f1),
         "weighted_f1": float(m.weighted_f1),
@@ -150,22 +152,18 @@ def _eval_majority(pack: dict[str, Any], horizon: int) -> list[dict[str, Any]]:
 
 
 def _eval_persistence(pack: dict[str, Any], horizon: int) -> list[dict[str, Any]]:
-    df_full = pack["df"][["ticker", "date", "regime"]].copy()
-    pred = persistence_pred_from_regime(df_full, horizon=horizon, regime_col="regime")
-    df_full["persist_pred"] = pred
-
     out = []
-    for split_name, split_df in [("valid", pack["valid"]), ("test", pack["test"])]:
-        keys = split_df[["ticker", "date", "regime"]].copy()
-        merged = keys.merge(
-            df_full[["ticker", "date", "persist_pred"]],
-            on=["ticker", "date"],
-            how="left",
+    for split_name in ["valid", "test"]:
+        aligned = _aligned_split_with_persistence(pack, split_name=split_name, horizon=horizon)
+        out.append(
+            _metrics_record(
+                "Persistence_t_minus_h",
+                horizon,
+                split_name,
+                aligned["y_true"],
+                aligned["y_persist"],
+            )
         )
-        merged = merged.dropna(subset=["persist_pred"]).copy()
-        y_true = merged["regime"].to_numpy(dtype=int)
-        y_pred = merged["persist_pred"].to_numpy(dtype=int)
-        out.append(_metrics_record("Persistence_t_minus_h", horizon, split_name, y_true, y_pred))
     return out
 
 
@@ -190,15 +188,12 @@ def _eval_rf_model(model_name: str, pack: dict[str, Any], horizon: int) -> list[
     pred_valid = model.predict(x_valid)
     pred_test = model.predict(x_test)
     return [
-        _metrics_record(model_name, horizon, "valid", y_valid, pred_valid),
-        _metrics_record(model_name, horizon, "test", y_test, pred_test),
+        _metrics_record(model_name, horizon, "valid", y_valid, pred_valid, target_view="regime"),
+        _metrics_record(model_name, horizon, "test", y_test, pred_test, target_view="regime"),
     ]
 
 
-def _eval_current_chain_xgb(
-    base_cfg: dict[str, Any],
-    horizon: int,
-) -> list[dict[str, Any]]:
+def _eval_current_chain_xgb(base_cfg: dict[str, Any], horizon: int) -> list[dict[str, Any]]:
     # Fixed "current model" configs from recent chain experiments.
     if int(horizon) == 5:
         chain_cfg = dict(
@@ -248,8 +243,22 @@ def _eval_current_chain_xgb(
     pred_valid = predict_xgb(model, x_valid)
     pred_test = predict_xgb(model, x_test)
     return [
-        _metrics_record("Current_Chain_XGB_tstudent", horizon, "valid", y_valid, pred_valid),
-        _metrics_record("Current_Chain_XGB_tstudent", horizon, "test", y_test, pred_test),
+        _metrics_record(
+            "Current_Chain_XGB_tstudent",
+            horizon,
+            "valid",
+            y_valid,
+            pred_valid,
+            target_view="regime",
+        ),
+        _metrics_record(
+            "Current_Chain_XGB_tstudent",
+            horizon,
+            "test",
+            y_test,
+            pred_test,
+            target_view="regime",
+        ),
     ]
 
 
@@ -280,7 +289,7 @@ def _eval_best_chain_from_walkforward(
     pack = make_dataset(cfg)
     feature_cols = pack["feature_cols"]
     x_train, y_train = build_xy(pack["train"], feature_cols)
-    x_valid_full, y_valid_full = build_xy(pack["valid"], feature_cols)
+    x_valid_full, _ = build_xy(pack["valid"], feature_cols)
     x_test_full, _ = build_xy(pack["test"], feature_cols)
 
     model_cfg = XGBConfig(
@@ -296,7 +305,7 @@ def _eval_best_chain_from_walkforward(
         seed=42,
     )
     model = make_xgb_model(model_cfg)
-    fit_xgb(model, x_train, y_train, X_valid=x_valid_full, y_valid=y_valid_full)
+    fit_xgb(model, x_train, y_train)
 
     blend_alpha = float(best.get("oof_selected_alpha", best.get("mean_selected_alpha", 1.0)))
     blend_alpha = float(np.clip(blend_alpha, 0.0, 1.0))
@@ -318,7 +327,6 @@ def _eval_best_chain_from_walkforward(
             alpha=blend_alpha,
             beta=blend_beta,
         )
-
         rows.append(
             _metrics_record(
                 model_name,
@@ -326,10 +334,13 @@ def _eval_best_chain_from_walkforward(
                 split_name,
                 y_eval,
                 pred_eval,
+                target_view="regime",
                 extra={
                     "blend_alpha": blend_alpha,
                     "blend_beta": blend_beta,
-                    "mean_effective_alpha": float(np.mean(alpha_vec) if len(alpha_vec) else blend_alpha),
+                    "mean_effective_alpha": float(
+                        np.mean(alpha_vec) if len(alpha_vec) else blend_alpha
+                    ),
                 },
             )
         )
@@ -345,6 +356,7 @@ def _split_class_balance(pack: dict[str, Any], horizon: int) -> list[dict[str, A
             {
                 "horizon": int(horizon),
                 "split": split_name,
+                "target_view": "regime",
                 "class_0": float(vc.get(0, 0.0)),
                 "class_1": float(vc.get(1, 0.0)),
                 "class_2": float(vc.get(2, 0.0)),
@@ -356,12 +368,22 @@ def _split_class_balance(pack: dict[str, Any], horizon: int) -> list[dict[str, A
 
 def build_improvement_table(metrics_df: pd.DataFrame) -> pd.DataFrame:
     test_df = metrics_df[metrics_df["split"] == "test"].copy()
+    if "target_view" not in test_df.columns:
+        test_df["target_view"] = "regime"
     out_rows = []
 
     for horizon in sorted(test_df["horizon"].unique()):
-        sub = test_df[test_df["horizon"] == horizon].copy()
-        maj = sub[sub["model"] == "MajorityClass"].iloc[0]
-        per = sub[sub["model"] == "Persistence_t_minus_h"].iloc[0]
+        sub = test_df[(test_df["horizon"] == horizon) & (test_df["target_view"] == "regime")].copy()
+        if sub.empty:
+            continue
+
+        a_rows = sub[sub["model"] == "MajorityClass"]
+        b_rows = sub[sub["model"] == "Persistence_t_minus_h"]
+        if a_rows.empty or b_rows.empty:
+            continue
+
+        a_ref = a_rows.iloc[0]
+        b_ref = b_rows.iloc[0]
         for _, row in sub.iterrows():
             if row["model"] in {"MajorityClass", "Persistence_t_minus_h"}:
                 continue
@@ -369,12 +391,19 @@ def build_improvement_table(metrics_df: pd.DataFrame) -> pd.DataFrame:
                 {
                     "model": row["model"],
                     "horizon": int(horizon),
-                    "delta_acc_vs_majority": float(row["accuracy"] - maj["accuracy"]),
-                    "delta_macro_f1_vs_majority": float(row["macro_f1"] - maj["macro_f1"]),
-                    "delta_weighted_f1_vs_majority": float(row["weighted_f1"] - maj["weighted_f1"]),
-                    "delta_acc_vs_persistence": float(row["accuracy"] - per["accuracy"]),
-                    "delta_macro_f1_vs_persistence": float(row["macro_f1"] - per["macro_f1"]),
-                    "delta_weighted_f1_vs_persistence": float(row["weighted_f1"] - per["weighted_f1"]),
+                    "target_view": "regime",
+                    "delta_acc_vs_majority": float(row["accuracy"] - a_ref["accuracy"]),
+                    "delta_macro_f1_vs_majority": float(row["macro_f1"] - a_ref["macro_f1"]),
+                    "delta_weighted_f1_vs_majority": float(
+                        row["weighted_f1"] - a_ref["weighted_f1"]
+                    ),
+                    "delta_acc_vs_persistence": float(row["accuracy"] - b_ref["accuracy"]),
+                    "delta_macro_f1_vs_persistence": float(
+                        row["macro_f1"] - b_ref["macro_f1"]
+                    ),
+                    "delta_weighted_f1_vs_persistence": float(
+                        row["weighted_f1"] - b_ref["weighted_f1"]
+                    ),
                 }
             )
     return pd.DataFrame(out_rows)
@@ -452,14 +481,14 @@ def main() -> int:
                 )
             )
         else:
-            all_metrics.extend(_eval_current_chain_xgb(base_cfg, horizon))
+            all_metrics.extend(_eval_current_chain_xgb(base_cfg=base_cfg, horizon=horizon))
 
     metrics_df = pd.DataFrame(all_metrics).sort_values(["horizon", "split", "model"])
     test_table = metrics_df[metrics_df["split"] == "test"][
-        ["model", "horizon", "accuracy", "macro_f1", "weighted_f1", "n_eval"]
+        ["model", "horizon", "target_view", "accuracy", "macro_f1", "weighted_f1", "n_eval"]
     ].sort_values(["horizon", "macro_f1"], ascending=[True, False])
     improvement_df = build_improvement_table(metrics_df)
-    balance_df = pd.DataFrame(balance_rows).sort_values(["horizon", "split"])
+    balance_df = pd.DataFrame(balance_rows).sort_values(["horizon", "split", "target_view"])
 
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)

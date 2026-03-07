@@ -12,6 +12,8 @@ env/
 Thumbs.db
 poetry.lock
 
+*.sh
+
 # Data:
 /data/raw/*
 /data/processed/*
@@ -46,3 +48,7 @@ config.yaml
 
 # Runs
 /runs/
+.model_locks/
+
+# Reports
+/reports/

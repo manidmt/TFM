@@ -124,7 +124,17 @@ def build_model(args):
     raise SystemExit("Invalid --model. Use: xgb | tabnet | ftt")
 
 
-def train_eval_one(model, fit_fn, predict_fn, x_train, y_train, x_valid, y_valid, x_test, y_test) -> dict:
+def train_eval_one(
+    model,
+    fit_fn,
+    predict_fn,
+    x_train,
+    y_train,
+    x_valid,
+    y_valid,
+    x_test,
+    y_test,
+) -> dict:
     fit_fn(model, x_train, y_train, X_valid=x_valid, y_valid=y_valid)
 
     pred_valid = predict_fn(model, x_valid)
@@ -133,7 +143,7 @@ def train_eval_one(model, fit_fn, predict_fn, x_train, y_train, x_valid, y_valid
     metrics_valid = compute_metrics(y_valid, pred_valid)
     metrics_test = compute_metrics(y_test, pred_test)
 
-    return {
+    out = {
         "valid": {
             "accuracy": metrics_valid.accuracy,
             "macro_f1": metrics_valid.macro_f1,
@@ -149,6 +159,8 @@ def train_eval_one(model, fit_fn, predict_fn, x_train, y_train, x_valid, y_valid
             "confusion": metrics_test.confusion.tolist(),
         },
     }
+
+    return out
 
 
 def main() -> int:
@@ -285,7 +297,6 @@ def main() -> int:
     print(metrics["valid"]["report"])
     print(f"TEST  acc={metrics['test']['accuracy']:.4f} macroF1={metrics['test']['macro_f1']:.4f}")
     print(metrics["test"]["report"])
-
     config_json = {
         "variant": variant_name,
         "dataset": {

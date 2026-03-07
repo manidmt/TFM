@@ -16,6 +16,7 @@ from quant_risk.datasets.make_dataset import DatasetConfig, build_xy, make_datas
 from quant_risk.models.tabular.xgb import XGBConfig, fit as fit_xgb, make_model as make_xgb_model, predict as predict_xgb
 from quant_risk.models.tabular.tabnet import TabNetConfig, fit as fit_tabnet, make_model as make_tabnet_model, predict as predict_tabnet
 from quant_risk.models.tabular.ft_transformer import FTTransformerConfig, fit as fit_ftt, make_model as make_ftt_model, predict as predict_ftt
+from quant_risk.models.tabular.tabpfn import TabPFNConfig, fit as fit_tabpfn, make_model as make_tabpfn_model, predict as predict_tabpfn
 
 
 DB = "data/db/financial_data.duckdb"
@@ -88,6 +89,36 @@ def test_fttransformer_smoke():
     model = make_ftt_model(cfg)
     fit_ftt(model, x_train, y_train, X_valid=x_valid, y_valid=y_valid)
     pred = predict_ftt(model, x_test)
+
+    assert pred.shape[0] == y_test.shape[0]
+    assert set(pred).issubset({0, 1, 2})
+
+
+def test_tabpfn_smoke(monkeypatch):
+    monkeypatch.setenv("TABPFN_MODEL_CACHE_DIR", "/tmp/tabpfn_cache")
+    pytest.importorskip("tabpfn")
+    x_train, y_train, x_valid, y_valid, x_test, y_test = _small_split()
+
+    cfg = TabPFNConfig(
+        n_estimators=1,
+        n_preprocessing_jobs=1,
+        random_state=7,
+        seed=7,
+    )
+    model = make_tabpfn_model(cfg)
+    try:
+        fit_tabpfn(model, x_train, y_train, X_valid=x_valid, y_valid=y_valid)
+    except (RuntimeError, PermissionError) as e:
+        err = str(e)
+        if (
+            "HuggingFace download failed" in err
+            or "Temporary failure in name resolution" in err
+            or "Cannot send a request" in err
+            or "Permission denied" in err
+        ):
+            pytest.skip(f"TabPFN no disponible en este entorno de ejecución: {err}")
+        raise
+    pred = predict_tabpfn(model, x_test)
 
     assert pred.shape[0] == y_test.shape[0]
     assert set(pred).issubset({0, 1, 2})
