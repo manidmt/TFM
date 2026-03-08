@@ -52,3 +52,4 @@ config.yaml
 
 # Reports
 /reports/
+/docs/
