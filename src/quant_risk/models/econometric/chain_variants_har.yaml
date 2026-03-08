@@ -1,0 +1,68 @@
+chain:
+  description: "Structural variants for HAR-RV->GARCH chain walk-forward."
+  schema_version: 1
+
+profiles:
+  promising:
+    - chain_mean_model: "har"
+      har_target_col: "rv_20"
+      har_lag_1: 1
+      har_lag_week: 5
+      har_lag_month: 22
+      har_exog_cols: []
+      garch_p: 2
+      garch_o: 1
+      garch_q: 2
+      garch_dist: "tstudent"
+      garch_vol: "Garch"
+      garch_chain_agg: "rms"
+      garch_scale: 100.0
+
+    - chain_mean_model: "har"
+      har_target_col: "rv_20"
+      har_lag_1: 1
+      har_lag_week: 5
+      har_lag_month: 22
+      har_exog_cols: ["net_liquidity_diff"]
+      garch_p: 2
+      garch_o: 1
+      garch_q: 2
+      garch_dist: "skewt"
+      garch_vol: "Garch"
+      garch_chain_agg: "rms"
+      garch_scale: 100.0
+
+    - chain_mean_model: "har"
+      har_target_col: "rv_20"
+      har_lag_1: 1
+      har_lag_week: 5
+      har_lag_month: 22
+      har_exog_cols: []
+      garch_p: 1
+      garch_o: 1
+      garch_q: 1
+      garch_dist: "tstudent"
+      garch_vol: "EGARCH"
+      garch_chain_agg: "mean"
+      garch_scale: 100.0
+
+  full_axes:
+    chain_mean_model: ["har"]
+    har_target_col: ["rv_20"]
+    har_lag_1: [1]
+    har_lag_week: [5]
+    har_lag_month: [22]
+    har_exog_cols:
+      - []
+      - ["net_liquidity_diff"]
+    sarimax_order:
+      - [1, 0, 1]
+    sarimax_chain_exog_cols:
+      - []
+    garch_p: [1, 2]
+    garch_o: [1]
+    garch_q: [1, 2]
+    garch_dist: ["tstudent", "skewt"]
+    garch_vol: ["Garch", "EGARCH", "GJR-GARCH"]
+    garch_chain_agg: ["rms", "mean"]
+    garch_scale: [80.0, 100.0]
