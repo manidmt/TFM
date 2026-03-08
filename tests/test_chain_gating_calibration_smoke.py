@@ -1,3 +1,13 @@
+'''
+@author: Manuel Díaz-Meco Terrés
+
+@email: manidmt5@gmail.com
+
+@date: 2026-03-08
+
+@description: Smoke tests for persistence-aware gating and calibration utilities.
+'''
+
 from __future__ import annotations
 
 import importlib.util
