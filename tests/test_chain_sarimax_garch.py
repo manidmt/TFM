@@ -150,3 +150,27 @@ def test_chain_make_dataset_real_smoke():
     assert len(pack["test"]) > 0
     assert any(c.startswith("sarimax_") for c in pack["feature_cols"])
     assert any(c.startswith("garch_") for c in pack["feature_cols"])
+
+
+def test_chain_har_make_dataset_real_smoke():
+    cfg = DatasetConfig(
+        db_path=DB,
+        tickers=("^GSPC",),
+        horizon=20,
+        pooled=False,
+        use_sarimax_garch_chain=True,
+        chain_mean_model="har",
+        har_target_col="rv_20",
+        har_exog_cols=(),
+        garch_vol="Garch",
+    )
+    pack = make_dataset(cfg)
+
+    assert len(pack["train"]) > 0
+    assert len(pack["valid"]) > 0
+    assert len(pack["test"]) > 0
+    assert any(c.startswith("har_") for c in pack["feature_cols"])
+    assert "sigma_diff1" in pack["feature_cols"]
+    assert "sigma_diff2" in pack["feature_cols"]
+    assert "abs_std_resid" in pack["feature_cols"]
+    assert "regime_boundary_distance" in pack["feature_cols"]

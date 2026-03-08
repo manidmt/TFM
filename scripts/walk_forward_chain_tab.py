@@ -78,11 +78,22 @@ def _normalize_exog_cols(value: Any) -> tuple[str, ...]:
 
 
 def _normalize_struct_cfg(row: dict[str, Any]) -> dict[str, Any]:
+    chain_mean_model = str(row.get("chain_mean_model", "sarimax")).lower()
+    if chain_mean_model not in {"sarimax", "har"}:
+        raise ValueError(
+            f"Invalid chain_mean_model={chain_mean_model!r}. Use 'sarimax' or 'har'."
+        )
     return {
-        "sarimax_order": _normalize_order(row["sarimax_order"]),
+        "chain_mean_model": chain_mean_model,
+        "sarimax_order": _normalize_order(row.get("sarimax_order", (1, 0, 1))),
         "sarimax_chain_exog_cols": _normalize_exog_cols(
             row.get("sarimax_chain_exog_cols", ())
         ),
+        "har_target_col": str(row.get("har_target_col", "rv_20")),
+        "har_lag_1": int(row.get("har_lag_1", 1)),
+        "har_lag_week": int(row.get("har_lag_week", 5)),
+        "har_lag_month": int(row.get("har_lag_month", 22)),
+        "har_exog_cols": _normalize_exog_cols(row.get("har_exog_cols", ())),
         "garch_p": int(row["garch_p"]),
         "garch_o": int(row.get("garch_o", 1)),
         "garch_q": int(row["garch_q"]),
@@ -109,8 +120,22 @@ def _load_chain_variants_from_yaml(profile: str, variants_path: str) -> list[dic
     axes = profiles.get("full_axes", {})
     if not isinstance(axes, dict):
         raise ValueError(f"{variants_path}: profiles.full_axes must be a mapping.")
-    orders = [_normalize_order(v) for v in axes.get("sarimax_order", [])]
+    mean_models = [str(v).lower() for v in axes.get("chain_mean_model", ["sarimax"])]
+    valid_mean_models = {"sarimax", "har"}
+    invalid_mean_models = sorted({m for m in mean_models if m not in valid_mean_models})
+    if invalid_mean_models:
+        raise ValueError(
+            f"{variants_path}: profiles.full_axes.chain_mean_model contains invalid "
+            f"entries {invalid_mean_models!r}; allowed values are "
+            f"{sorted(valid_mean_models)!r}."
+        )
+    orders = [_normalize_order(v) for v in axes.get("sarimax_order", [(1, 0, 1)])]
     exogs = [_normalize_exog_cols(v) for v in axes.get("sarimax_chain_exog_cols", [()])]
+    har_targets = [str(v) for v in axes.get("har_target_col", ["rv_20"])]
+    har_lag_1_vals = [int(v) for v in axes.get("har_lag_1", [1])]
+    har_lag_week_vals = [int(v) for v in axes.get("har_lag_week", [5])]
+    har_lag_month_vals = [int(v) for v in axes.get("har_lag_month", [22])]
+    har_exogs = [_normalize_exog_cols(v) for v in axes.get("har_exog_cols", [()])]
     p_vals = [int(v) for v in axes.get("garch_p", [])]
     o_vals = [int(v) for v in axes.get("garch_o", [1])]
     q_vals = [int(v) for v in axes.get("garch_q", [])]
@@ -118,18 +143,56 @@ def _load_chain_variants_from_yaml(profile: str, variants_path: str) -> list[dic
     vols = [str(v) for v in axes.get("garch_vol", ["Garch"])]
     aggs = [str(v) for v in axes.get("garch_chain_agg", [])]
     scales = [float(v) for v in axes.get("garch_scale", [])]
-    if not all([orders, exogs, p_vals, o_vals, q_vals, dists, vols, aggs, scales]):
+    if not all(
+        [
+            mean_models,
+            orders,
+            exogs,
+            har_targets,
+            har_lag_1_vals,
+            har_lag_week_vals,
+            har_lag_month_vals,
+            har_exogs,
+            p_vals,
+            o_vals,
+            q_vals,
+            dists,
+            vols,
+            aggs,
+            scales,
+        ]
+    ):
         raise ValueError(
             f"{variants_path}: profiles.full_axes is missing required non-empty keys."
         )
     out: list[dict[str, Any]] = []
-    for order, exog, p, o, q, dist, vol, agg, scale in itertools.product(
-        orders, exogs, p_vals, o_vals, q_vals, dists, vols, aggs, scales
+    for mean_model, order, exog, har_target, har_l1, har_lw, har_lm, har_exog, p, o, q, dist, vol, agg, scale in itertools.product(
+        mean_models,
+        orders,
+        exogs,
+        har_targets,
+        har_lag_1_vals,
+        har_lag_week_vals,
+        har_lag_month_vals,
+        har_exogs,
+        p_vals,
+        o_vals,
+        q_vals,
+        dists,
+        vols,
+        aggs,
+        scales,
     ):
         out.append(
             {
+                "chain_mean_model": str(mean_model),
                 "sarimax_order": order,
                 "sarimax_chain_exog_cols": exog,
+                "har_target_col": str(har_target),
+                "har_lag_1": int(har_l1),
+                "har_lag_week": int(har_lw),
+                "har_lag_month": int(har_lm),
+                "har_exog_cols": har_exog,
                 "garch_p": int(p),
                 "garch_o": int(o),
                 "garch_q": int(q),
@@ -169,8 +232,31 @@ def make_structural_configs(profile: str, variants_path: str = DEFAULT_CHAIN_VAR
     if profile == "promising":
         return [
             {
+                "chain_mean_model": "har",
+                "sarimax_order": (1, 0, 1),
+                "sarimax_chain_exog_cols": (),
+                "har_target_col": "rv_20",
+                "har_lag_1": 1,
+                "har_lag_week": 5,
+                "har_lag_month": 22,
+                "har_exog_cols": (),
+                "garch_p": 2,
+                "garch_o": 1,
+                "garch_q": 2,
+                "garch_dist": "tstudent",
+                "garch_vol": "Garch",
+                "garch_chain_agg": "rms",
+                "garch_scale": 100.0,
+            },
+            {
+                "chain_mean_model": "sarimax",
                 "sarimax_order": (2, 0, 1),
                 "sarimax_chain_exog_cols": ("net_liquidity_diff",),
+                "har_target_col": "rv_20",
+                "har_lag_1": 1,
+                "har_lag_week": 5,
+                "har_lag_month": 22,
+                "har_exog_cols": (),
                 "garch_p": 2,
                 "garch_o": 1,
                 "garch_q": 2,
@@ -180,8 +266,14 @@ def make_structural_configs(profile: str, variants_path: str = DEFAULT_CHAIN_VAR
                 "garch_scale": 100.0,
             },
             {
+                "chain_mean_model": "sarimax",
                 "sarimax_order": (2, 0, 1),
                 "sarimax_chain_exog_cols": ("net_liquidity_diff",),
+                "har_target_col": "rv_20",
+                "har_lag_1": 1,
+                "har_lag_week": 5,
+                "har_lag_month": 22,
+                "har_exog_cols": (),
                 "garch_p": 2,
                 "garch_o": 1,
                 "garch_q": 2,
@@ -191,8 +283,14 @@ def make_structural_configs(profile: str, variants_path: str = DEFAULT_CHAIN_VAR
                 "garch_scale": 100.0,
             },
             {
+                "chain_mean_model": "sarimax",
                 "sarimax_order": (2, 0, 1),
                 "sarimax_chain_exog_cols": ("net_liquidity_diff",),
+                "har_target_col": "rv_20",
+                "har_lag_1": 1,
+                "har_lag_week": 5,
+                "har_lag_month": 22,
+                "har_exog_cols": (),
                 "garch_p": 1,
                 "garch_o": 1,
                 "garch_q": 2,
@@ -202,8 +300,14 @@ def make_structural_configs(profile: str, variants_path: str = DEFAULT_CHAIN_VAR
                 "garch_scale": 80.0,
             },
             {
+                "chain_mean_model": "sarimax",
                 "sarimax_order": (1, 0, 1),
                 "sarimax_chain_exog_cols": (),
+                "har_target_col": "rv_20",
+                "har_lag_1": 1,
+                "har_lag_week": 5,
+                "har_lag_month": 22,
+                "har_exog_cols": (),
                 "garch_p": 1,
                 "garch_o": 1,
                 "garch_q": 1,
@@ -213,8 +317,14 @@ def make_structural_configs(profile: str, variants_path: str = DEFAULT_CHAIN_VAR
                 "garch_scale": 100.0,
             },
             {
+                "chain_mean_model": "sarimax",
                 "sarimax_order": (1, 0, 0),
                 "sarimax_chain_exog_cols": ("net_liquidity_diff",),
+                "har_target_col": "rv_20",
+                "har_lag_1": 1,
+                "har_lag_week": 5,
+                "har_lag_month": 22,
+                "har_exog_cols": (),
                 "garch_p": 1,
                 "garch_o": 1,
                 "garch_q": 1,
@@ -224,8 +334,14 @@ def make_structural_configs(profile: str, variants_path: str = DEFAULT_CHAIN_VAR
                 "garch_scale": 80.0,
             },
             {
+                "chain_mean_model": "sarimax",
                 "sarimax_order": (2, 0, 1),
                 "sarimax_chain_exog_cols": (),
+                "har_target_col": "rv_20",
+                "har_lag_1": 1,
+                "har_lag_week": 5,
+                "har_lag_month": 22,
+                "har_exog_cols": (),
                 "garch_p": 2,
                 "garch_o": 1,
                 "garch_q": 1,
@@ -235,8 +351,14 @@ def make_structural_configs(profile: str, variants_path: str = DEFAULT_CHAIN_VAR
                 "garch_scale": 100.0,
             },
             {
+                "chain_mean_model": "sarimax",
                 "sarimax_order": (1, 0, 1),
                 "sarimax_chain_exog_cols": ("net_liquidity_diff",),
+                "har_target_col": "rv_20",
+                "har_lag_1": 1,
+                "har_lag_week": 5,
+                "har_lag_month": 22,
+                "har_exog_cols": (),
                 "garch_p": 2,
                 "garch_o": 1,
                 "garch_q": 1,
@@ -247,8 +369,14 @@ def make_structural_configs(profile: str, variants_path: str = DEFAULT_CHAIN_VAR
             },
         ]
 
+    mean_models = ["sarimax", "har"]
     orders = [(1, 0, 1), (2, 0, 1)]
     exogs = [(), ("net_liquidity_diff",)]
+    har_targets = ["rv_20"]
+    har_lag_1_vals = [1]
+    har_lag_week_vals = [5]
+    har_lag_month_vals = [22]
+    har_exogs = [()]
     p_vals = [1, 2]
     o_vals = [1]
     q_vals = [1, 2]
@@ -258,13 +386,33 @@ def make_structural_configs(profile: str, variants_path: str = DEFAULT_CHAIN_VAR
     scales = [80.0, 100.0]
 
     out = []
-    for order, exog, p, o, q, dist, vol, agg, scale in itertools.product(
-        orders, exogs, p_vals, o_vals, q_vals, dists, vols, aggs, scales
+    for mean_model, order, exog, har_target, har_l1, har_lw, har_lm, har_exog, p, o, q, dist, vol, agg, scale in itertools.product(
+        mean_models,
+        orders,
+        exogs,
+        har_targets,
+        har_lag_1_vals,
+        har_lag_week_vals,
+        har_lag_month_vals,
+        har_exogs,
+        p_vals,
+        o_vals,
+        q_vals,
+        dists,
+        vols,
+        aggs,
+        scales,
     ):
         out.append(
             {
+                "chain_mean_model": str(mean_model),
                 "sarimax_order": order,
                 "sarimax_chain_exog_cols": exog,
+                "har_target_col": str(har_target),
+                "har_lag_1": int(har_l1),
+                "har_lag_week": int(har_lw),
+                "har_lag_month": int(har_lm),
+                "har_exog_cols": har_exog,
                 "garch_p": int(p),
                 "garch_o": int(o),
                 "garch_q": int(q),
@@ -797,8 +945,14 @@ def _prepare_fold_data(
         valid_end=valid_end,
         regime_bins=int(regime_bins),
         use_sarimax_garch_chain=True,
+        chain_mean_model=str(struct_cfg.get("chain_mean_model", "sarimax")),
         sarimax_order=tuple(struct_cfg["sarimax_order"]),
         sarimax_chain_exog_cols=tuple(struct_cfg["sarimax_chain_exog_cols"]),
+        har_target_col=str(struct_cfg.get("har_target_col", "rv_20")),
+        har_lag_1=int(struct_cfg.get("har_lag_1", 1)),
+        har_lag_week=int(struct_cfg.get("har_lag_week", 5)),
+        har_lag_month=int(struct_cfg.get("har_lag_month", 22)),
+        har_exog_cols=tuple(struct_cfg.get("har_exog_cols", ())),
         garch_p=int(struct_cfg["garch_p"]),
         garch_o=int(struct_cfg.get("garch_o", 1)),
         garch_q=int(struct_cfg["garch_q"]),
@@ -1075,8 +1229,14 @@ def _official_test_compare(
         valid_end=valid_end,
         regime_bins=int(regime_bins),
         use_sarimax_garch_chain=True,
+        chain_mean_model=str(struct_cfg.get("chain_mean_model", "sarimax")),
         sarimax_order=tuple(struct_cfg["sarimax_order"]),
         sarimax_chain_exog_cols=tuple(struct_cfg["sarimax_chain_exog_cols"]),
+        har_target_col=str(struct_cfg.get("har_target_col", "rv_20")),
+        har_lag_1=int(struct_cfg.get("har_lag_1", 1)),
+        har_lag_week=int(struct_cfg.get("har_lag_week", 5)),
+        har_lag_month=int(struct_cfg.get("har_lag_month", 22)),
+        har_exog_cols=tuple(struct_cfg.get("har_exog_cols", ())),
         garch_p=int(struct_cfg["garch_p"]),
         garch_o=int(struct_cfg.get("garch_o", 1)),
         garch_q=int(struct_cfg["garch_q"]),
@@ -1707,8 +1867,14 @@ def main() -> int:
             train_end=features_cfg["split"]["train_end"],
             valid_end=features_cfg["split"]["val_end"],
             struct_cfg={
+                "chain_mean_model": best.get("chain_mean_model", "sarimax"),
                 "sarimax_order": best["sarimax_order"],
                 "sarimax_chain_exog_cols": best["sarimax_chain_exog_cols"],
+                "har_target_col": best.get("har_target_col", "rv_20"),
+                "har_lag_1": best.get("har_lag_1", 1),
+                "har_lag_week": best.get("har_lag_week", 5),
+                "har_lag_month": best.get("har_lag_month", 22),
+                "har_exog_cols": best.get("har_exog_cols", ()),
                 "garch_p": best["garch_p"],
                 "garch_o": best.get("garch_o", 1),
                 "garch_q": best["garch_q"],
