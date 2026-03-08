@@ -47,15 +47,30 @@ DEFAULT_TABPFN_VARIANTS_CONFIG = "src/quant_risk/models/tabular/tabpfn_variants.
 
 
 def load_yaml(path: str) -> dict[str, Any]:
+    """@brief Load a YAML file.
+
+    @param path YAML file path.
+    @return Parsed YAML content as dictionary.
+    """
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
 def month_end(ts: pd.Timestamp) -> pd.Timestamp:
+    """@brief Snap a timestamp to month-end.
+
+    @param ts Input timestamp.
+    @return Month-end timestamp.
+    """
     return pd.Timestamp(ts).to_period("M").to_timestamp("M")
 
 
 def _normalize_order(value: Any) -> tuple[int, int, int]:
+    """@brief Normalize a SARIMAX order to `(p, d, q)`.
+
+    @param value Order as tuple/list or `p,d,q` string.
+    @return Normalized `(p, d, q)` tuple.
+    """
     if isinstance(value, (list, tuple)) and len(value) == 3:
         return (int(value[0]), int(value[1]), int(value[2]))
     if isinstance(value, str):
@@ -66,6 +81,11 @@ def _normalize_order(value: Any) -> tuple[int, int, int]:
 
 
 def _normalize_exog_cols(value: Any) -> tuple[str, ...]:
+    """@brief Normalize exogenous columns into a tuple.
+
+    @param value Exogenous columns as tuple/list/string.
+    @return Tuple of exogenous column names.
+    """
     if value is None:
         return ()
     if isinstance(value, (list, tuple)):
@@ -81,6 +101,11 @@ def _normalize_exog_cols(value: Any) -> tuple[str, ...]:
 
 
 def _normalize_struct_cfg(row: dict[str, Any]) -> dict[str, Any]:
+    """@brief Validate and normalize one structural chain configuration.
+
+    @param row Raw structural config dictionary.
+    @return Normalized structural config.
+    """
     chain_mean_model = str(row.get("chain_mean_model", "sarimax")).lower()
     if chain_mean_model not in {"sarimax", "har"}:
         raise ValueError(
@@ -108,6 +133,12 @@ def _normalize_struct_cfg(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _load_chain_variants_from_yaml(profile: str, variants_path: str) -> list[dict[str, Any]]:
+    """@brief Load chain structural variants from YAML.
+
+    @param profile Grid profile (`promising` or `full`).
+    @param variants_path YAML path with variant definitions.
+    @return List of normalized structural configs.
+    """
     if not Path(variants_path).exists():
         return []
     doc = load_yaml(variants_path)
@@ -214,6 +245,14 @@ def build_folds(
     valid_months: int,
     step_months: int,
 ) -> list[tuple[str, str]]:
+    """@brief Build walk-forward fold boundaries.
+
+    @param min_train_end First train end date.
+    @param max_valid_end Last validation end date.
+    @param valid_months Validation window size in months.
+    @param step_months Fold step size in months.
+    @return List of `(train_end, valid_end)` tuples.
+    """
     folds: list[tuple[str, str]] = []
     train_end = month_end(pd.to_datetime(min_train_end))
     max_valid = month_end(pd.to_datetime(max_valid_end))
@@ -229,6 +268,12 @@ def build_folds(
 
 
 def make_structural_configs(profile: str, variants_path: str = DEFAULT_CHAIN_VARIANTS_CONFIG) -> list[dict[str, Any]]:
+    """@brief Build structural chain configuration grid.
+
+    @param profile Grid profile (`promising` or `full`).
+    @param variants_path YAML path for structural variants.
+    @return List of structural configurations.
+    """
     yaml_cfgs = _load_chain_variants_from_yaml(profile, variants_path)
     if yaml_cfgs:
         return yaml_cfgs
@@ -429,6 +474,11 @@ def make_structural_configs(profile: str, variants_path: str = DEFAULT_CHAIN_VAR
 
 
 def make_xgb_configs(profile: str) -> list[dict[str, Any]]:
+    """@brief Build XGBoost hyperparameter grid.
+
+    @param profile Grid profile (`promising` or `full`).
+    @return List of XGBoost model configs.
+    """
     if profile == "promising":
         return [
             {
@@ -500,6 +550,15 @@ def make_tabpfn_configs(
     model_version: str = "v2",
     variants_path: str = DEFAULT_TABPFN_VARIANTS_CONFIG,
 ) -> list[dict[str, Any]]:
+    """@brief Build TabPFN hyperparameter grid.
+
+    @param profile Grid profile (`promising` or `full`).
+    @param device Execution device for TabPFN.
+    @param n_preprocessing_jobs Number of preprocessing jobs.
+    @param model_version TabPFN checkpoint family (`v2` or `v2.5`).
+    @param variants_path YAML path with TabPFN variants.
+    @return List of TabPFN model configs.
+    """
     model_version_l = str(model_version).lower()
     if model_version_l not in {"v2", "v2.5"}:
         raise ValueError(f"Invalid tabpfn model_version={model_version!r}. Use 'v2' or 'v2.5'.")
@@ -593,6 +652,11 @@ def make_tabpfn_configs(
 
 
 def _high_vol_recall(metrics_obj: Any) -> float:
+    """@brief Get recall for the highest-volatility class.
+
+    @param metrics_obj Metrics-like object with `class_recall`.
+    @return Recall for highest class label, or NaN.
+    """
     if not getattr(metrics_obj, "class_recall", None):
         return float("nan")
     high_vol_label = max(metrics_obj.class_recall.keys())
@@ -600,6 +664,12 @@ def _high_vol_recall(metrics_obj: Any) -> float:
 
 
 def _one_hot_probs(y: np.ndarray, n_classes: int) -> np.ndarray:
+    """@brief Convert class labels to one-hot probability rows.
+
+    @param y Integer class labels.
+    @param n_classes Number of classes.
+    @return One-hot matrix of shape `(n_samples, n_classes)`.
+    """
     y_arr = np.asarray(y, dtype=int)
     out = np.zeros((len(y_arr), int(n_classes)), dtype=float)
     if len(y_arr):
@@ -608,6 +678,12 @@ def _one_hot_probs(y: np.ndarray, n_classes: int) -> np.ndarray:
 
 
 def _parse_unit_interval_list(spec: str, *, name: str) -> tuple[float, ...]:
+    """@brief Parse comma-separated values constrained to `[0, 1]`.
+
+    @param spec Comma-separated numeric string.
+    @param name Parameter name for error messages.
+    @return Sorted unique tuple of floats.
+    """
     vals: list[float] = []
     for tok in str(spec).split(","):
         tok = tok.strip()
@@ -623,14 +699,29 @@ def _parse_unit_interval_list(spec: str, *, name: str) -> tuple[float, ...]:
 
 
 def _parse_blend_alphas(spec: str) -> tuple[float, ...]:
+    """@brief Parse blend alpha candidates.
+
+    @param spec Comma-separated alpha values.
+    @return Valid alpha tuple.
+    """
     return _parse_unit_interval_list(spec, name="blend_alphas")
 
 
 def _parse_blend_conf_betas(spec: str) -> tuple[float, ...]:
+    """@brief Parse confidence-beta candidates for blending.
+
+    @param spec Comma-separated beta values.
+    @return Valid beta tuple.
+    """
     return _parse_unit_interval_list(spec, name="blend_conf_betas")
 
 
 def _parse_gate_thresholds(spec: str) -> tuple[float, ...]:
+    """@brief Parse gating confidence thresholds.
+
+    @param spec Comma-separated threshold values.
+    @return Valid threshold tuple.
+    """
     return _parse_unit_interval_list(spec, name="gate_thresholds")
 
 
@@ -639,6 +730,12 @@ def _parse_class_threshold_grid(
     *,
     n_classes: int = 3,
 ) -> tuple[tuple[float, ...], ...]:
+    """@brief Parse class-threshold vectors from CLI syntax.
+
+    @param spec Semicolon-separated vectors, each comma-separated.
+    @param n_classes Expected values per vector.
+    @return Tuple of class-threshold vectors.
+    """
     vectors: list[tuple[float, ...]] = []
     text = str(spec).strip()
     if not text:
@@ -668,11 +765,22 @@ def _parse_class_threshold_grid(
 
 
 def _format_class_thresholds(v: np.ndarray | tuple[float, ...] | list[float]) -> str:
+    """@brief Serialize class thresholds to compact string form.
+
+    @param v Class-threshold vector.
+    @return Thresholds joined with `|`.
+    """
     arr = np.asarray(v, dtype=float).reshape(-1)
     return "|".join(f"{x:.6g}" for x in arr)
 
 
 def _parse_class_thresholds(value: Any, *, n_classes: int = 3) -> np.ndarray:
+    """@brief Normalize class thresholds to numpy array.
+
+    @param value Threshold input as string/list/array.
+    @param n_classes Expected number of classes.
+    @return Array of shape `(n_classes,)`.
+    """
     if isinstance(value, str):
         if not value.strip():
             return np.ones(n_classes, dtype=float)
@@ -690,6 +798,11 @@ def _parse_class_thresholds(value: Any, *, n_classes: int = 3) -> np.ndarray:
 
 
 def _normalize_proba_rows(proba: np.ndarray) -> np.ndarray:
+    """@brief Sanitize and row-normalize probability matrix.
+
+    @param proba Probability matrix.
+    @return Valid probability matrix with row sums equal to 1.
+    """
     p = np.asarray(proba, dtype=float)
     p = np.nan_to_num(p, nan=0.0, posinf=0.0, neginf=0.0)
     p = np.clip(p, 0.0, 1.0)
@@ -709,6 +822,13 @@ def _fit_probability_calibrator(
     y_true: np.ndarray,
     method: str,
 ) -> dict[str, Any]:
+    """@brief Fit a one-vs-rest probability calibrator.
+
+    @param proba Base probabilities.
+    @param y_true Ground-truth labels.
+    @param method Calibration method (`none`, `platt`, `isotonic`).
+    @return Calibrator payload (method + fitted per-class models).
+    """
     method_l = str(method).lower().strip()
     if method_l in {"", "none"}:
         return {"method": "none", "models": [], "n_classes": int(np.asarray(proba).shape[1])}
@@ -749,6 +869,12 @@ def _apply_probability_calibrator(
     proba: np.ndarray,
     calibrator: dict[str, Any] | None,
 ) -> np.ndarray:
+    """@brief Apply calibrated probabilities and re-normalize rows.
+
+    @param proba Input probabilities.
+    @param calibrator Calibrator object from `_fit_probability_calibrator`.
+    @return Calibrated probability matrix.
+    """
     if not calibrator or str(calibrator.get("method", "none")) == "none":
         return _normalize_proba_rows(proba)
 
@@ -775,6 +901,12 @@ def _predict_with_class_thresholds(
     proba: np.ndarray,
     class_thresholds: np.ndarray | tuple[float, ...] | list[float] | None = None,
 ) -> np.ndarray:
+    """@brief Predict labels after class-wise threshold reweighting.
+
+    @param proba Probability matrix.
+    @param class_thresholds Optional class-wise divisors.
+    @return Predicted class labels.
+    """
     p = _normalize_proba_rows(proba)
     n_classes = int(p.shape[1])
     thr = (
@@ -787,6 +919,13 @@ def _predict_with_class_thresholds(
 
 
 def _subset_macro_f1(y_true: np.ndarray, y_pred: np.ndarray, mask: np.ndarray) -> float:
+    """@brief Compute macro-F1 on a masked subset.
+
+    @param y_true Ground-truth labels.
+    @param y_pred Predicted labels.
+    @param mask Boolean mask selecting the subset.
+    @return Macro-F1 on subset or NaN when empty.
+    """
     m = np.asarray(mask, dtype=bool)
     if int(np.sum(m)) == 0:
         return float("nan")
@@ -802,6 +941,16 @@ def _blend_strategy_predict(
     class_thresholds: np.ndarray | tuple[float, ...] | list[float] | None = None,
     gate_threshold: float = 0.0,
 ) -> dict[str, Any]:
+    """@brief Predict with blend + confidence gating against persistence.
+
+    @param proba_chain Chain model probabilities.
+    @param y_persist Persistence labels.
+    @param alpha Base chain blend weight.
+    @param beta Confidence-adaptive blend weight factor.
+    @param class_thresholds Optional class-wise thresholds.
+    @param gate_threshold Confidence threshold to route to persistence.
+    @return Prediction payload with labels, probabilities, and diagnostics.
+    """
     p_chain = _normalize_proba_rows(proba_chain)
     alpha_c = float(np.clip(alpha, 0.0, 1.0))
     beta_c = float(np.clip(beta, 0.0, 1.0))
@@ -830,6 +979,11 @@ def _blend_strategy_predict(
 
 
 def _safe_mean(x: list[float] | np.ndarray) -> float:
+    """@brief Compute NaN-safe mean with empty input handling.
+
+    @param x Numeric list or array.
+    @return Mean value or NaN when empty.
+    """
     arr = np.asarray(x, dtype=float).reshape(-1)
     if arr.size == 0:
         return float("nan")
@@ -842,6 +996,13 @@ def _aligned_split_with_persistence(
     split_df: pd.DataFrame,
     horizon: int,
 ) -> dict[str, Any]:
+    """@brief Align a split with persistence predictions.
+
+    @param df_all Full panel with ticker/date/regime.
+    @param split_df Split dataframe to align.
+    @param horizon Persistence forecast horizon.
+    @return Alignment payload with masks, labels, and baseline metrics.
+    """
     tmp = df_all[["ticker", "date", "regime"]].copy()
     tmp["persist_pred"] = persistence_pred_from_regime(tmp, horizon=horizon, regime_col="regime")
 
@@ -897,6 +1058,14 @@ def _blend_predict(
     alpha: float,
     beta: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray]:
+    """@brief Backward-compatible blend prediction helper.
+
+    @param proba_chain Chain model probabilities.
+    @param y_persist Persistence labels.
+    @param alpha Base blend alpha.
+    @param beta Confidence beta.
+    @return Tuple `(pred_labels, effective_alpha_per_row)`.
+    """
     pred_info = _blend_strategy_predict(
         proba_chain=proba_chain,
         y_persist=y_persist,
@@ -921,6 +1090,20 @@ def _blend_metrics(
     class_thresholds: np.ndarray | tuple[float, ...] | list[float] | None = None,
     gate_threshold: float = 0.0,
 ) -> dict[str, float]:
+    """@brief Compute blended model metrics and deltas vs persistence.
+
+    @param proba_chain Chain model probabilities.
+    @param y_true_target Ground-truth labels in target space.
+    @param y_persist_target Persistence labels in target space.
+    @param y_true_regime Ground-truth labels in regime space.
+    @param persist_target_metrics Persistence metrics in target space.
+    @param persist_regime_metrics Persistence metrics in regime space.
+    @param alpha Base blend alpha.
+    @param beta Confidence beta.
+    @param class_thresholds Optional class-wise thresholds.
+    @param gate_threshold Confidence threshold for gating.
+    @return Dictionary with metrics, deltas, and prediction artifacts.
+    """
     pred_info = _blend_strategy_predict(
         proba_chain=proba_chain,
         y_persist=np.asarray(y_persist_target, dtype=int),
@@ -1037,6 +1220,20 @@ def _pick_best_blend_strategy(
     persist_target_metrics: dict[str, float],
     persist_regime_metrics: dict[str, float],
 ) -> tuple[dict[str, Any], dict[str, float]]:
+    """@brief Select best blend/gating strategy on a grid.
+
+    @param proba_chain Chain model probabilities.
+    @param y_true_target Ground-truth labels in target space.
+    @param y_persist_target Persistence labels in target space.
+    @param y_true_regime Ground-truth labels in regime space.
+    @param blend_alphas Candidate alpha values.
+    @param blend_conf_betas Candidate beta values.
+    @param class_threshold_grid Candidate class-threshold vectors.
+    @param gate_thresholds Candidate gating thresholds.
+    @param persist_target_metrics Persistence metrics in target space.
+    @param persist_regime_metrics Persistence metrics in regime space.
+    @return Tuple `(best_config, best_metrics)`.
+    """
     best_cfg = {
         "selected_alpha": float(blend_alphas[-1]),
         "selected_beta": float(blend_conf_betas[0]),
@@ -1089,6 +1286,15 @@ def _cache_key(
     valid_end: str,
     struct_cfg: dict[str, Any],
 ) -> str:
+    """@brief Build deterministic cache key for one fold config.
+
+    @param asset Asset or asset-group identifier.
+    @param horizon Forecast horizon.
+    @param train_end Fold train end date.
+    @param valid_end Fold validation end date.
+    @param struct_cfg Structural chain config.
+    @return Short SHA1 cache key.
+    """
     payload = {
         "cache_schema": 2,
         "asset": asset,
@@ -1113,6 +1319,19 @@ def _prepare_fold_data(
     cache_dir: Path,
     use_cache: bool,
 ) -> dict[str, Any]:
+    """@brief Build train/valid matrices and persistence alignment for one fold.
+
+    @param db_path DuckDB path.
+    @param tickers Tickers included in this run.
+    @param horizon Forecast horizon.
+    @param regime_bins Number of regime bins.
+    @param train_end Fold train end date.
+    @param valid_end Fold validation end date.
+    @param struct_cfg Structural chain configuration.
+    @param cache_dir Cache directory for fold artifacts.
+    @param use_cache Whether to read/write fold cache.
+    @return Dictionary with fold arrays, baseline labels, and metrics.
+    """
     asset_name = "_".join(tickers)
     ck = _cache_key(asset_name, horizon, train_end, valid_end, struct_cfg)
     cp = cache_dir / f"fold_{ck}.npz"
@@ -1142,6 +1361,11 @@ def _prepare_fold_data(
         z = np.load(cp)
         if required_cache_keys.issubset(set(z.files)):
             def _scalar(name: str) -> float:
+                """@brief Read a cached scalar value from an NPZ entry.
+
+                @param name Key in NPZ file.
+                @return Scalar float value.
+                """
                 return float(np.asarray(z[name]).reshape(-1)[0])
 
             return {
@@ -1282,6 +1506,20 @@ def _fit_eval_tabular(
     class_threshold_grid: tuple[tuple[float, ...], ...],
     gate_thresholds: tuple[float, ...],
 ) -> dict[str, Any]:
+    """@brief Fit one tabular model and evaluate it on one fold.
+
+    @param tabular_model Tabular backend name (`xgb` or `tabpfn`).
+    @param model_cfg Model hyperparameters.
+    @param fold_data Prepared fold payload from `_prepare_fold_data`.
+    @param xgb_n_jobs Number of CPU jobs for XGB.
+    @param use_blend Whether blend/gating search is enabled.
+    @param blend_alphas Candidate alpha values.
+    @param blend_conf_betas Candidate beta values.
+    @param calibration_method Probability calibration method.
+    @param class_threshold_grid Candidate class-threshold vectors.
+    @param gate_thresholds Candidate gating thresholds.
+    @return Fold-level metrics and artifacts for model selection.
+    """
     model_name = str(tabular_model).lower()
     if model_name == "xgb":
         cfg = XGBConfig(
@@ -1492,6 +1730,26 @@ def _official_test_compare(
     blend_gate_threshold: float,
     calibration_method: str,
 ) -> dict[str, Any]:
+    """@brief Run final official test evaluation against persistence.
+
+    @param db_path DuckDB path.
+    @param tickers Tickers included in the run.
+    @param horizon Forecast horizon.
+    @param regime_bins Number of regime bins.
+    @param train_end Official train end date.
+    @param valid_end Official validation end date.
+    @param struct_cfg Selected structural chain configuration.
+    @param model_cfg Selected tabular model configuration.
+    @param tabular_model Tabular backend name.
+    @param xgb_n_jobs Number of CPU jobs for XGB.
+    @param use_blend Whether blend/gating is active.
+    @param blend_alpha Selected alpha value.
+    @param blend_beta Selected beta value.
+    @param blend_class_thresholds Selected class thresholds.
+    @param blend_gate_threshold Selected gating threshold.
+    @param calibration_method Probability calibration method.
+    @return Final test metrics and deltas versus persistence.
+    """
     dcfg = DatasetConfig(
         db_path=db_path,
         tickers=tickers,
@@ -1712,6 +1970,10 @@ def _official_test_compare(
 
 
 def main() -> int:
+    """@brief CLI entrypoint for walk-forward selection and final evaluation.
+
+    @return Process exit code.
+    """
     parser = argparse.ArgumentParser(
         description="Walk-forward model selection for chain SARIMAX->GARCH->tabular."
     )
