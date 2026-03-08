@@ -77,7 +77,11 @@ def _sanitize_tabpfn_array(
         medians = np.asarray(stats.get("medians"), dtype=np.float64)
         clip_abs = np.asarray(stats.get("clip_abs"), dtype=np.float64)
         if medians.shape != (n_features,) or clip_abs.shape != (n_features,):
-            stats = _fit_stats(arr)
+            raise ValueError(
+                "Shape mismatch between provided sanitize stats and input features: "
+                f"expected ({n_features},), got medians.shape={medians.shape}, "
+                f"clip_abs.shape={clip_abs.shape}"
+            )
 
     medians = np.asarray(stats["medians"], dtype=np.float64)
     clip_abs = np.asarray(stats["clip_abs"], dtype=np.float64)

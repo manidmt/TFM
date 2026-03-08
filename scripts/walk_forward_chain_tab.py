@@ -121,6 +121,14 @@ def _load_chain_variants_from_yaml(profile: str, variants_path: str) -> list[dic
     if not isinstance(axes, dict):
         raise ValueError(f"{variants_path}: profiles.full_axes must be a mapping.")
     mean_models = [str(v).lower() for v in axes.get("chain_mean_model", ["sarimax"])]
+    valid_mean_models = {"sarimax", "har"}
+    invalid_mean_models = sorted({m for m in mean_models if m not in valid_mean_models})
+    if invalid_mean_models:
+        raise ValueError(
+            f"{variants_path}: profiles.full_axes.chain_mean_model contains invalid "
+            f"entries {invalid_mean_models!r}; allowed values are "
+            f"{sorted(valid_mean_models)!r}."
+        )
     orders = [_normalize_order(v) for v in axes.get("sarimax_order", [(1, 0, 1)])]
     exogs = [_normalize_exog_cols(v) for v in axes.get("sarimax_chain_exog_cols", [()])]
     har_targets = [str(v) for v in axes.get("har_target_col", ["rv_20"])]

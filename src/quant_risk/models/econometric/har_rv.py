@@ -109,7 +109,10 @@ def fit_har_rv(train_df: pd.DataFrame, cfg: HarRvConfig) -> dict[str, dict[str, 
         beta, *_ = np.linalg.lstsq(x_mat, y_vec, rcond=None)
         y_hat = x_mat @ beta
         resid = y_vec - y_hat
-        resid_std = float(np.std(resid, ddof=max(1, x_mat.shape[1] - 1)))
+        n_obs = int(resid.shape[0])
+        k_params = int(x_mat.shape[1])  # includes intercept
+        denom = max(n_obs - k_params, 1)
+        resid_std = float(np.sqrt(np.sum(resid ** 2) / denom))
 
         fitted[ticker] = {
             "beta": beta.astype(float),
@@ -155,6 +158,11 @@ def make_har_rv_features(
 
         exog = None
         if cfg.exog_cols:
+            missing = set(cfg.exog_cols) - set(sub.columns)
+            if missing:
+                raise ValueError(
+                    f"HAR exog columns {missing} not found in full_df for ticker={ticker}"
+                )
             exog = sub[list(cfg.exog_cols)].to_numpy(dtype=float)
             exog = np.nan_to_num(exog, nan=0.0, posinf=0.0, neginf=0.0)
 
@@ -186,12 +194,9 @@ def make_har_rv_features(
 
             hist = list(y[: i + 1])
             for step in range(1, h + 1):
-                j = i + step
                 if exog is not None:
-                    if j < n:
-                        ex_row = exog[j]
-                    else:
-                        ex_row = exog[i]
+                    # Carry-forward current exog to avoid look-ahead leakage.
+                    ex_row = exog[i]
                 else:
                     ex_row = None
                 x_future = _row_from_history(
@@ -220,4 +225,3 @@ def make_har_rv_features(
         ]
 
     return out
-

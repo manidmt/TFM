@@ -152,3 +152,12 @@ def test_tabpfn_sanitize_array_handles_non_finite_and_extreme_values():
     assert x_test_clean.dtype == np.float32
     assert np.isfinite(x_test_clean).all()
     assert np.max(np.abs(x_test_clean)) <= 1e6
+
+
+def test_tabpfn_sanitize_array_shape_mismatch_raises():
+    x_train = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float64)
+    _, stats = _sanitize_tabpfn_array(x_train)
+    x_bad = np.array([[1.0, 2.0, 3.0]], dtype=np.float64)
+
+    with pytest.raises(ValueError, match="Shape mismatch"):
+        _sanitize_tabpfn_array(x_bad, stats=stats)

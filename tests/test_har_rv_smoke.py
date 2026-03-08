@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from quant_risk.models.econometric.har_rv import HarRvConfig, fit_har_rv, make_har_rv_features
 
@@ -58,3 +59,22 @@ def test_har_rv_smoke_features_non_empty():
     assert "har_resid" in out.columns
     assert out["har_fcst_mean_h5"].notna().sum() > 0
     assert out["har_resid"].notna().sum() > 0
+
+
+def test_har_rv_make_features_missing_exog_raises():
+    full_df = _sample_df()
+    train_df = full_df[full_df["date"] <= pd.Timestamp("2020-10-30")].copy()
+
+    cfg = HarRvConfig(
+        horizon=5,
+        target_col="rv_20",
+        lag_1=1,
+        lag_week=5,
+        lag_month=22,
+        exog_cols=("net_liquidity_diff",),
+    )
+    fitted = fit_har_rv(train_df, cfg)
+
+    full_df_missing = full_df.drop(columns=["net_liquidity_diff"])
+    with pytest.raises(ValueError, match="HAR exog columns"):
+        make_har_rv_features(full_df_missing, fitted, cfg)
