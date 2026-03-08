@@ -10,13 +10,20 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 from quant_risk.datasets.make_dataset import DatasetConfig, build_xy, make_dataset
 from quant_risk.models.tabular.xgb import XGBConfig, fit as fit_xgb, make_model as make_xgb_model, predict as predict_xgb
 from quant_risk.models.tabular.tabnet import TabNetConfig, fit as fit_tabnet, make_model as make_tabnet_model, predict as predict_tabnet
 from quant_risk.models.tabular.ft_transformer import FTTransformerConfig, fit as fit_ftt, make_model as make_ftt_model, predict as predict_ftt
-from quant_risk.models.tabular.tabpfn import TabPFNConfig, fit as fit_tabpfn, make_model as make_tabpfn_model, predict as predict_tabpfn
+from quant_risk.models.tabular.tabpfn import (
+    TabPFNConfig,
+    _sanitize_tabpfn_array,
+    fit as fit_tabpfn,
+    make_model as make_tabpfn_model,
+    predict as predict_tabpfn,
+)
 
 
 DB = "data/db/financial_data.duckdb"
@@ -122,3 +129,26 @@ def test_tabpfn_smoke(monkeypatch):
 
     assert pred.shape[0] == y_test.shape[0]
     assert set(pred).issubset({0, 1, 2})
+
+
+def test_tabpfn_sanitize_array_handles_non_finite_and_extreme_values():
+    x_train = np.array(
+        [
+            [0.1, np.inf, -np.inf, np.nan],
+            [1.0, 2.0, 3.0, 4.0],
+            [1e300, -1e300, 5.0, 6.0],
+            [7.0, 8.0, 9.0, 10.0],
+        ],
+        dtype=np.float64,
+    )
+    x_clean, stats = _sanitize_tabpfn_array(x_train)
+
+    assert x_clean.dtype == np.float32
+    assert np.isfinite(x_clean).all()
+    assert np.max(np.abs(x_clean)) <= 1e6
+
+    x_test = np.array([[np.inf, np.nan, -np.inf, 1e400]], dtype=np.float64)
+    x_test_clean, _ = _sanitize_tabpfn_array(x_test, stats=stats)
+    assert x_test_clean.dtype == np.float32
+    assert np.isfinite(x_test_clean).all()
+    assert np.max(np.abs(x_test_clean)) <= 1e6
