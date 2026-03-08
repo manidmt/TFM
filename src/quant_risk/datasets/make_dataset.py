@@ -267,20 +267,41 @@ def _regime_boundary_distance(
     bins: pd.DataFrame,
     signal_col: str,
 ) -> pd.Series:
-    if signal_col not in df_split.columns:
+    if signal_col not in df_split.columns or df_split.empty:
         return pd.Series(np.nan, index=df_split.index, dtype=float)
 
-    def _dist(row) -> float:
-        ticker = row["ticker"]
-        if ticker not in bins.index:
-            return np.nan
-        cuts = np.asarray(bins.loc[ticker].values, dtype=float)
-        val = float(row[signal_col])
-        if not np.isfinite(val) or cuts.size == 0:
-            return np.nan
-        return float(np.min(np.abs(cuts - val)))
+    if "ticker" not in df_split.columns:
+        raise ValueError("df_split must contain 'ticker' column.")
+    if not isinstance(bins, pd.DataFrame):
+        raise TypeError("bins must be a pandas DataFrame indexed by ticker.")
+    if bins.empty:
+        return pd.Series(np.nan, index=df_split.index, dtype=float)
 
-    return df_split.apply(_dist, axis=1).astype(float)
+    tickers = df_split["ticker"]
+    bins_aligned = bins.reindex(tickers)
+    cuts_arr = bins_aligned.to_numpy(dtype=float)
+    if cuts_arr.size == 0:
+        return pd.Series(np.nan, index=df_split.index, dtype=float)
+
+    vals = pd.to_numeric(df_split[signal_col], errors="coerce").to_numpy(dtype=float)
+    distances = np.full(len(df_split), np.nan, dtype=float)
+
+    valid_val = np.isfinite(vals)
+    valid_cuts_mask = np.isfinite(cuts_arr)
+    row_has_valid_cut = valid_cuts_mask.any(axis=1)
+    valid_rows = valid_val & row_has_valid_cut
+    if not np.any(valid_rows):
+        return pd.Series(distances, index=df_split.index, dtype=float)
+
+    cuts_sub = cuts_arr[valid_rows]
+    vals_sub = vals[valid_rows]
+    diff = np.abs(cuts_sub - vals_sub[:, None])
+    diff[~np.isfinite(cuts_sub)] = np.nan
+    with np.errstate(all="ignore"):
+        row_min = np.nanmin(diff, axis=1)
+
+    distances[valid_rows] = row_min.astype(float)
+    return pd.Series(distances, index=df_split.index, dtype=float)
 
 
 def make_dataset(cfg: DatasetConfig) -> dict:
