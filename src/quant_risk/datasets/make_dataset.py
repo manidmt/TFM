@@ -26,6 +26,7 @@ from quant_risk.models.econometric.gjrgarch import (
     fit_gjrgarch,
     make_gjrgarch_features,
 )
+from quant_risk.models.econometric.har_rv import HarRvConfig, fit_har_rv, make_har_rv_features
 
 
 @dataclass(frozen=True)
@@ -52,7 +53,13 @@ class DatasetConfig:
     sarimax_exog_cols: tuple[str, ...] = ()
     sarimax_target_col: str = "rv_20"
     use_sarimax_garch_chain: bool = False
+    chain_mean_model: str = "sarimax"  # sarimax | har
     sarimax_chain_exog_cols: tuple[str, ...] = ()
+    har_target_col: str = "rv_20"
+    har_lag_1: int = 1
+    har_lag_week: int = 5
+    har_lag_month: int = 22
+    har_exog_cols: tuple[str, ...] = ()
     use_garch: bool = False
     garch_p: int = 1
     garch_o: int = 1
@@ -242,6 +249,40 @@ def _vol_feature_columns(prefix: str, horizon: int) -> list[str]:
     ]
 
 
+def _chain_sigma_alias_columns(horizon: int) -> list[str]:
+    return [
+        "sigma_t",
+        f"sigma_fwd_h{horizon}",
+        f"sigma_delta_h{horizon}",
+        f"sigma_ratio_h{horizon}",
+        "sigma_diff1",
+        "sigma_diff2",
+        "abs_std_resid",
+    ]
+
+
+def _regime_boundary_distance(
+    df_split: pd.DataFrame,
+    *,
+    bins: pd.DataFrame,
+    signal_col: str,
+) -> pd.Series:
+    if signal_col not in df_split.columns:
+        return pd.Series(np.nan, index=df_split.index, dtype=float)
+
+    def _dist(row) -> float:
+        ticker = row["ticker"]
+        if ticker not in bins.index:
+            return np.nan
+        cuts = np.asarray(bins.loc[ticker].values, dtype=float)
+        val = float(row[signal_col])
+        if not np.isfinite(val) or cuts.size == 0:
+            return np.nan
+        return float(np.min(np.abs(cuts - val)))
+
+    return df_split.apply(_dist, axis=1).astype(float)
+
+
 def make_dataset(cfg: DatasetConfig) -> dict:
     df = load_joined(cfg)
 
@@ -255,17 +296,28 @@ def make_dataset(cfg: DatasetConfig) -> dict:
             "garch_target_col='vol_fwd' would leak future information. "
             "Use a past-only return/vol proxy such as logret or rv_20."
         )
+    if cfg.use_sarimax_garch_chain and str(cfg.chain_mean_model).lower() == "har":
+        if cfg.har_target_col == "vol_fwd":
+            raise ValueError(
+                "har_target_col='vol_fwd' would leak future information. "
+                "Use a past-only volatility proxy such as rv_20."
+            )
     if cfg.use_sarimax_garch_chain and (cfg.use_sarimax or cfg.use_garch):
         raise ValueError(
             "use_sarimax_garch_chain=True is mutually exclusive with use_sarimax/use_garch. "
             "The chain mode already computes both stages."
         )
+    if cfg.use_sarimax_garch_chain and str(cfg.chain_mean_model).lower() not in {"sarimax", "har"}:
+        raise ValueError("chain_mean_model must be one of: 'sarimax' | 'har'")
     banned_future = {"vol_fwd"}
     _assert_no_future_cols(
         tuple(cfg.sarimax_exog_cols), banned_future, "sarimax_exog_cols"
     )
     _assert_no_future_cols(
         tuple(cfg.sarimax_chain_exog_cols), banned_future, "sarimax_chain_exog_cols"
+    )
+    _assert_no_future_cols(
+        tuple(cfg.har_exog_cols), banned_future, "har_exog_cols"
     )
 
     if cfg.pooled:
@@ -312,6 +364,18 @@ def make_dataset(cfg: DatasetConfig) -> dict:
         out_df[ratio_col] = out_df[sigma_h_col] / out_df[sigma_t_col].replace(0.0, np.nan)
         out_df[diff_col] = out_df.groupby("ticker")[sigma_t_col].diff(1)
         out_df[accel_col] = out_df.groupby("ticker")[diff_col].diff(1)
+
+        # Generic aliases so downstream models are robust across GARCH families.
+        out_df["sigma_t"] = out_df[sigma_t_col]
+        out_df[f"sigma_fwd_h{cfg.horizon}"] = out_df[sigma_h_col]
+        out_df[f"sigma_delta_h{cfg.horizon}"] = out_df[delta_col]
+        out_df[f"sigma_ratio_h{cfg.horizon}"] = out_df[ratio_col]
+        out_df["sigma_diff1"] = out_df[diff_col]
+        out_df["sigma_diff2"] = out_df[accel_col]
+        z_col = f"{prefix}_z"
+        if z_col in out_df.columns:
+            out_df["abs_std_resid"] = out_df[z_col].abs()
+
         return out_df
 
     def _make_vol_objects(
@@ -368,54 +432,85 @@ def make_dataset(cfg: DatasetConfig) -> dict:
         )
         return vol_prefix, vol_cfg, fit_gjrgarch, make_gjrgarch_features
 
-    if cfg.use_sarimax_garch_chain:
-        print("Fitting chained SARIMAX->GARCH models on training data...")
+    active_vol_prefix: str | None = None
 
+    if cfg.use_sarimax_garch_chain:
+        chain_mean_model = str(cfg.chain_mean_model).lower()
         chain_exog_cols = (
             cfg.sarimax_chain_exog_cols
             if cfg.sarimax_chain_exog_cols
             else cfg.sarimax_exog_cols
         )
 
-        sarimax_cfg_chain = SarimaxConfig(
-            order=cfg.sarimax_order,
-            seasonal_order=cfg.sarimax_seasonal_order,
-            trend=cfg.sarimax_trend,
-            horizon=cfg.horizon,
-            target_col="logret",
-            log_transform=False,
-            exog_cols=chain_exog_cols,
-            train_nobs_by_ticker=train.groupby("ticker").size().to_dict(),
-        )
+        if chain_mean_model == "sarimax":
+            print("Fitting chained SARIMAX->GARCH models on training data...")
+            sarimax_cfg_chain = SarimaxConfig(
+                order=cfg.sarimax_order,
+                seasonal_order=cfg.sarimax_seasonal_order,
+                trend=cfg.sarimax_trend,
+                horizon=cfg.horizon,
+                target_col="logret",
+                log_transform=False,
+                exog_cols=chain_exog_cols,
+                train_nobs_by_ticker=train.groupby("ticker").size().to_dict(),
+            )
 
-        train_for_sarimax_chain = train[
-            ["ticker", "date", "logret"] + list(chain_exog_cols)
-        ].copy()
-        fitted_sarimax_chain = fit_sarimax(train_for_sarimax_chain, sarimax_cfg_chain)
+            train_for_mean_chain = train[
+                ["ticker", "date", "logret"] + list(chain_exog_cols)
+            ].copy()
+            fitted_mean_chain = fit_sarimax(train_for_mean_chain, sarimax_cfg_chain)
 
-        print("Generating chained SARIMAX features for all rows (train/valid/test) ...")
-        combined = make_sarimax_features(combined, fitted_sarimax_chain, sarimax_cfg_chain)
+            print("Generating chained SARIMAX features for all rows (train/valid/test) ...")
+            combined = make_sarimax_features(combined, fitted_mean_chain, sarimax_cfg_chain)
+            mean_resid_col = "sarimax_resid"
+            mean_cols = [
+                f"sarimax_fcst_mean_h{cfg.horizon}",
+                f"sarimax_fcst_se_h{cfg.horizon}",
+                f"sarimax_ci_width_h{cfg.horizon}",
+                "sarimax_resid",
+                "sarimax_resid_std",
+            ]
+        else:
+            print("Fitting chained HAR-RV->GARCH models on training data...")
+            har_exog_cols = cfg.har_exog_cols if cfg.har_exog_cols else chain_exog_cols
+            har_cfg_chain = HarRvConfig(
+                horizon=cfg.horizon,
+                target_col=cfg.har_target_col,
+                lag_1=int(cfg.har_lag_1),
+                lag_week=int(cfg.har_lag_week),
+                lag_month=int(cfg.har_lag_month),
+                exog_cols=tuple(har_exog_cols),
+                train_nobs_by_ticker=train.groupby("ticker").size().to_dict(),
+            )
+            train_for_mean_chain = train[
+                ["ticker", "date", cfg.har_target_col] + list(har_exog_cols)
+            ].copy()
+            fitted_mean_chain = fit_har_rv(train_for_mean_chain, har_cfg_chain)
+            print("Generating chained HAR-RV features for all rows (train/valid/test) ...")
+            combined = make_har_rv_features(combined, fitted_mean_chain, har_cfg_chain)
+            mean_resid_col = "har_resid"
+            mean_cols = [
+                f"har_fcst_mean_h{cfg.horizon}",
+                f"har_fcst_se_h{cfg.horizon}",
+                f"har_ci_width_h{cfg.horizon}",
+                "har_resid",
+                "har_resid_std",
+            ]
 
-        if "sarimax_resid" not in combined.columns:
-            raise RuntimeError("SARIMAX chain failed: 'sarimax_resid' was not generated.")
-
-        sarimax_cols = [
-            f"sarimax_fcst_mean_h{cfg.horizon}",
-            f"sarimax_fcst_se_h{cfg.horizon}",
-            f"sarimax_ci_width_h{cfg.horizon}",
-            "sarimax_resid",
-            "sarimax_resid_std",
-        ]
-        for c in sarimax_cols:
+        if mean_resid_col not in combined.columns:
+            raise RuntimeError(
+                f"Chain mean model failed: '{mean_resid_col}' was not generated."
+            )
+        for c in mean_cols:
             if c in combined.columns and c not in feature_cols:
                 feature_cols.append(c)
 
         train_keys = train[["ticker", "date"]].drop_duplicates()
         train_enriched = combined.merge(train_keys, on=["ticker", "date"], how="inner")
-        train_for_vol_chain = train_enriched[["ticker", "date", "sarimax_resid"]].dropna()
+        train_for_vol_chain = train_enriched[["ticker", "date", mean_resid_col]].dropna()
         vol_train_sizes = train_for_vol_chain.groupby("ticker").size().to_dict()
         vol_prefix, vol_cfg_chain, fit_vol, make_vol_features = _make_vol_objects(
-            target_col="sarimax_resid",
+            target_col=mean_resid_col,
             agg=cfg.garch_chain_agg,
             train_sizes=vol_train_sizes,
         )
@@ -423,12 +518,15 @@ def make_dataset(cfg: DatasetConfig) -> dict:
             vol_cfg_chain = replace(vol_cfg_chain, mean="zero")
 
         fitted_vol_chain = fit_vol(train_for_vol_chain, vol_cfg_chain)
-
         print(f"Generating chained {cfg.garch_vol} features for all rows (train/valid/test) ...")
         combined = make_vol_features(combined, fitted_vol_chain, vol_cfg_chain)
         combined = _append_vol_dynamic_features(combined, prefix=vol_prefix)
+        active_vol_prefix = vol_prefix
 
         for c in _vol_feature_columns(vol_prefix, cfg.horizon):
+            if c in combined.columns and c not in feature_cols:
+                feature_cols.append(c)
+        for c in _chain_sigma_alias_columns(cfg.horizon):
             if c in combined.columns and c not in feature_cols:
                 feature_cols.append(c)
 
@@ -484,6 +582,7 @@ def make_dataset(cfg: DatasetConfig) -> dict:
         print(f"Generating {cfg.garch_vol} features for all rows (train/valid/test) ...")
         combined = make_vol_features(combined, fitted_garch, vol_cfg)
         combined = _append_vol_dynamic_features(combined, prefix=vol_prefix)
+        active_vol_prefix = vol_prefix
 
         missing = [
             c
@@ -502,6 +601,9 @@ def make_dataset(cfg: DatasetConfig) -> dict:
         for c in _vol_feature_columns(vol_prefix, cfg.horizon):
             if c in combined.columns and c not in feature_cols:
                 feature_cols.append(c)
+        for c in _chain_sigma_alias_columns(cfg.horizon):
+            if c in combined.columns and c not in feature_cols:
+                feature_cols.append(c)
 
     df_model = combined.copy()
     
@@ -514,6 +616,23 @@ def make_dataset(cfg: DatasetConfig) -> dict:
         split["regime"] = _apply_bins(
             split, bins, regime_bins=cfg.regime_bins, per_ticker=True
         )
+        split["regime"] = split["regime"].astype(int)
+
+    if active_vol_prefix is not None:
+        signal_col = f"{active_vol_prefix}_sigma_fwd_h{cfg.horizon}"
+        for split in (train, valid, test):
+            split["regime_boundary_distance"] = _regime_boundary_distance(
+                split,
+                bins=bins,
+                signal_col=signal_col,
+            )
+        if "regime_boundary_distance" not in feature_cols:
+            feature_cols.append("regime_boundary_distance")
+
+    # Guardrail: ensure model splits are finite for all selected features.
+    train = train.dropna(subset=feature_cols + ["regime"]).copy()
+    valid = valid.dropna(subset=feature_cols + ["regime"]).copy()
+    test = test.dropna(subset=feature_cols + ["regime"]).copy()
 
     # After bins applied
     df_binned = pd.concat([train, valid, test], ignore_index=True).sort_values(["ticker", "date"])
