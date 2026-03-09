@@ -62,6 +62,8 @@ def main() -> int:
         news_include_roll_sum=bool(feat_cfg.get("news_features", {}).get("include_roll_sum", True)),
         news_include_roll_mean=bool(feat_cfg.get("news_features", {}).get("include_roll_mean", True)),
         news_include_roll_std=bool(feat_cfg.get("news_features", {}).get("include_roll_std", True)),
+        news_include_tone_std=bool(feat_cfg.get("news_features", {}).get("include_tone_std", False)),
+        news_include_tone_neg_share=bool(feat_cfg.get("news_features", {}).get("include_tone_neg_share", False)),
         news_query_ids=news_query_ids,
     )
     print(build_features(bcfg, tickers=tickers))

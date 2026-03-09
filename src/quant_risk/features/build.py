@@ -46,6 +46,8 @@ class BuildFeaturesConfig:
     news_include_roll_sum: bool = True
     news_include_roll_mean: bool = True
     news_include_roll_std: bool = True
+    news_include_tone_std: bool = False
+    news_include_tone_neg_share: bool = False
     news_query_ids: tuple[str, ...] = ()
 
 
@@ -134,7 +136,12 @@ def _load_news_block(
     windows = tuple(sorted({int(w) for w in cfg.news_windows if int(w) > 0}))
     shock_window = max(windows) if windows else 20
     lag_bdays = int(cfg.news_publication_lag_bdays)
-    base_cols = ["news_count", "tone_mean", "tone_std", "tone_neg_share", "attention_shock_z"]
+    raw_cols = ["news_count", "tone_mean"]
+    if bool(cfg.news_include_tone_std):
+        raw_cols.append("tone_std")
+    if bool(cfg.news_include_tone_neg_share):
+        raw_cols.append("tone_neg_share")
+    base_cols = [*raw_cols, "attention_shock_z"]
 
     for query_id in query_ids:
         if dfn.empty or "date" not in dfn.columns:
@@ -155,7 +162,7 @@ def _load_news_block(
             sub["tone_neg_share"] = pd.to_numeric(sub["tone_neg_share"], errors="coerce").fillna(0.0)
 
         if lag_bdays > 0:
-            for c in ["news_count", "tone_mean", "tone_std", "tone_neg_share"]:
+            for c in raw_cols:
                 sub[c] = sub[c].shift(lag_bdays)
 
         roll_mu = sub["news_count"].rolling(shock_window).mean()
@@ -172,7 +179,23 @@ def _load_news_block(
                 if cfg.news_include_roll_std:
                     sub[f"{c}_std_w{w}"] = roll.std()
 
-        cols_to_merge = [c for c in sub.columns if c != "date"]
+        cols_to_merge = [c for c in base_cols if c in sub.columns]
+        for c in base_cols:
+            for w in windows:
+                if cfg.news_include_roll_sum:
+                    name = f"{c}_sum_w{w}"
+                    if name in sub.columns:
+                        cols_to_merge.append(name)
+                if cfg.news_include_roll_mean:
+                    name = f"{c}_mean_w{w}"
+                    if name in sub.columns:
+                        cols_to_merge.append(name)
+                if cfg.news_include_roll_std:
+                    name = f"{c}_std_w{w}"
+                    if name in sub.columns:
+                        cols_to_merge.append(name)
+        cols_to_merge = list(dict.fromkeys(cols_to_merge))
+        sub = sub[["date", *cols_to_merge]].copy()
         if use_suffix:
             suffix = _sanitize_query_id(query_id)
             rename_map = {c: f"{c}_{suffix}" for c in cols_to_merge}

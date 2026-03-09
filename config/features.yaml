@@ -40,6 +40,8 @@ news_features:
   include_roll_sum: true
   include_roll_mean: true
   include_roll_std: true
+  include_tone_std: false
+  include_tone_neg_share: false
 
 split:
   train_end: "2020-12-31"
