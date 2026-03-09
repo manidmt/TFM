@@ -31,5 +31,9 @@ gdelt:
   mode: "timeline"
   keep_artlist_sample: false
   query: "(finance OR market OR stocks OR bitcoin OR treasury)"
+  queries:
+    macro_us: "(US stocks OR S&P 500 OR treasury OR federal reserve OR inflation)"
+    crypto: "(bitcoin OR ethereum OR crypto OR cryptocurrency)"
+    rates: "(treasury yield OR bond yield OR interest rates OR fed funds OR sofr)"
   max_records_per_day: 250
   timeout_seconds: 30

@@ -35,6 +35,7 @@ class GdeltIngestConfig:
     mode: str = "timeline"  # timeline | artlist
     keep_artlist_sample: bool = False
     query: str = "(finance OR market OR stocks OR bitcoin OR treasury)"
+    queries: dict[str, str] | None = None
     max_records_per_day: int = 250
     timeout_seconds: int = 30
 
@@ -50,20 +51,62 @@ def init_schema(con: duckdb.DuckDBPyConnection, table: str) -> None:
     """
     Ensure the target daily GDELT table exists with the expected schema.
     """
+    table_exists = con.execute(
+        """
+        SELECT COUNT(*)
+        FROM information_schema.tables
+        WHERE table_schema='main' AND table_name=?
+        """,
+        [table],
+    ).fetchone()[0] == 1
+
+    if not table_exists:
+        con.execute(
+            f"""
+            CREATE TABLE {table} (
+                date DATE NOT NULL,
+                query_id TEXT NOT NULL,
+                news_count BIGINT,
+                tone_mean DOUBLE,
+                tone_std DOUBLE,
+                tone_neg_share DOUBLE,
+                source TEXT,
+                inserted_at TIMESTAMP,
+                PRIMARY KEY (date, query_id)
+            );
+            """
+        )
+        return
+
+    cols = [r[1] for r in con.execute(f"PRAGMA table_info('{table}')").fetchall()]
+    if "query_id" in cols:
+        return
+
+    tmp_table = f"{table}__migrating"
     con.execute(
         f"""
-        CREATE TABLE IF NOT EXISTS {table} (
+        CREATE TABLE {tmp_table} (
             date DATE NOT NULL,
+            query_id TEXT NOT NULL,
             news_count BIGINT,
             tone_mean DOUBLE,
             tone_std DOUBLE,
             tone_neg_share DOUBLE,
             source TEXT,
             inserted_at TIMESTAMP,
-            PRIMARY KEY (date)
+            PRIMARY KEY (date, query_id)
         );
         """
     )
+    con.execute(
+        f"""
+        INSERT INTO {tmp_table} (date, query_id, news_count, tone_mean, tone_std, tone_neg_share, source, inserted_at)
+        SELECT date, 'default' AS query_id, news_count, tone_mean, tone_std, tone_neg_share, source, inserted_at
+        FROM {table}
+        """
+    )
+    con.execute(f"DROP TABLE {table}")
+    con.execute(f"ALTER TABLE {tmp_table} RENAME TO {table}")
 
 
 def get_last_date(con: duckdb.DuckDBPyConnection, table: str) -> Optional[date]:
@@ -114,12 +157,13 @@ def _fetch_doc_mode_csv(
     mode: str,
     start_day: date,
     end_day: date,
+    query: str,
 ) -> pd.DataFrame:
     """
     Fetch a CSV response from GDELT Doc API for a date range and mode.
     """
     params = {
-        "query": cfg.query,
+        "query": str(query),
         "mode": mode,
         "format": "CSV",
         "startdatetime": _day_to_api_start(start_day),
@@ -169,11 +213,17 @@ def _normalize_articles(df: pd.DataFrame) -> pd.DataFrame:
     return norm
 
 
-def fetch_day_articles(cfg: GdeltIngestConfig, day: date) -> pd.DataFrame:
+def fetch_day_articles(cfg: GdeltIngestConfig, day: date, query: str | None = None) -> pd.DataFrame:
     """
     Fetch daily article-level records from GDELT Doc API for one calendar day.
     """
-    raw = _fetch_doc_mode_csv(cfg, mode="ArtList", start_day=day, end_day=day)
+    raw = _fetch_doc_mode_csv(
+        cfg,
+        mode="ArtList",
+        start_day=day,
+        end_day=day,
+        query=str(query or cfg.query),
+    )
     return _normalize_articles(raw)
 
 
@@ -254,11 +304,22 @@ def _normalize_timeline_metric(df: pd.DataFrame, value_candidates: tuple[str, ..
     return norm.reset_index(drop=True)
 
 
-def fetch_timeline_volraw(cfg: GdeltIngestConfig, start_day: date, end_day: date) -> pd.DataFrame:
+def fetch_timeline_volraw(
+    cfg: GdeltIngestConfig,
+    start_day: date,
+    end_day: date,
+    query: str | None = None,
+) -> pd.DataFrame:
     """
     Fetch timeline volume aggregates and map them to daily news_count.
     """
-    raw = _fetch_doc_mode_csv(cfg, mode="TimelineVolRaw", start_day=start_day, end_day=end_day)
+    raw = _fetch_doc_mode_csv(
+        cfg,
+        mode="TimelineVolRaw",
+        start_day=start_day,
+        end_day=end_day,
+        query=str(query or cfg.query),
+    )
     norm = _normalize_timeline_metric(
         raw,
         value_candidates=("count", "volume", "vol", "value"),
@@ -270,11 +331,22 @@ def fetch_timeline_volraw(cfg: GdeltIngestConfig, start_day: date, end_day: date
     return out.sort_values("date").reset_index(drop=True)
 
 
-def fetch_timeline_tone(cfg: GdeltIngestConfig, start_day: date, end_day: date) -> pd.DataFrame:
+def fetch_timeline_tone(
+    cfg: GdeltIngestConfig,
+    start_day: date,
+    end_day: date,
+    query: str | None = None,
+) -> pd.DataFrame:
     """
     Fetch timeline tone aggregates and map them to daily tone_mean.
     """
-    raw = _fetch_doc_mode_csv(cfg, mode="TimelineTone", start_day=start_day, end_day=end_day)
+    raw = _fetch_doc_mode_csv(
+        cfg,
+        mode="TimelineTone",
+        start_day=start_day,
+        end_day=end_day,
+        query=str(query or cfg.query),
+    )
     norm = _normalize_timeline_metric(
         raw,
         value_candidates=("tone", "value", "avgtone", "meantone"),
@@ -350,6 +422,97 @@ def fetch_timeline_range(cfg: GdeltIngestConfig, start_day: date, end_day: date)
     return out[cols].sort_values("date").reset_index(drop=True)
 
 
+def _queries_from_cfg(cfg: GdeltIngestConfig) -> dict[str, str]:
+    """
+    Return configured thematic queries as {query_id: query_text}.
+    """
+    if cfg.queries:
+        out: dict[str, str] = {}
+        for k, v in cfg.queries.items():
+            qid = str(k).strip()
+            qtxt = str(v).strip()
+            if not qid or not qtxt:
+                continue
+            out[qid] = qtxt
+        if out:
+            return out
+    return {"default": str(cfg.query)}
+
+
+def fetch_artlist_range_for_query(
+    cfg: GdeltIngestConfig,
+    start_day: date,
+    end_day: date,
+    query_text: str,
+) -> tuple[pd.DataFrame, dict[str, str]]:
+    """
+    Fetch ArtList daily samples for a single query over a date range.
+    """
+    days = _iter_days(start_day, end_day)
+    daily_rows: list[pd.DataFrame] = []
+    errors: dict[str, str] = {}
+    for day in days:
+        try:
+            articles = fetch_day_articles(cfg, day, query=query_text)
+            daily = aggregate_daily(articles)
+            if not daily.empty:
+                daily_rows.append(daily)
+        except Exception as exc:
+            errors[day.isoformat()] = str(exc)
+
+    if daily_rows:
+        merged = pd.concat(daily_rows, ignore_index=True)
+        merged = (
+            merged.sort_values("date")
+            .groupby("date", as_index=False)
+            .agg(
+                news_count=("news_count", "sum"),
+                tone_mean=("tone_mean", "mean"),
+                tone_std=("tone_std", "mean"),
+                tone_neg_share=("tone_neg_share", "mean"),
+            )
+        )
+    else:
+        merged = pd.DataFrame(columns=["date", "news_count", "tone_mean", "tone_std", "tone_neg_share"])
+    return merged, errors
+
+
+def fetch_timeline_range_for_query(
+    cfg: GdeltIngestConfig,
+    start_day: date,
+    end_day: date,
+    query_text: str,
+) -> pd.DataFrame:
+    """
+    Fetch timeline aggregates for a single query over a date range.
+    """
+    vol = fetch_timeline_volraw(cfg, start_day, end_day, query=query_text)
+    tone = fetch_timeline_tone(cfg, start_day, end_day, query=query_text)
+    out = vol.merge(tone, on="date", how="outer").sort_values("date").reset_index(drop=True)
+    if out.empty:
+        out = pd.DataFrame(columns=["date", "news_count", "tone_mean"])
+
+    out["tone_std"] = np.nan
+    out["tone_neg_share"] = np.nan
+
+    if bool(cfg.keep_artlist_sample):
+        art_sample, _ = fetch_artlist_range_for_query(cfg, start_day, end_day, query_text=query_text)
+        if not art_sample.empty:
+            sample_cols = ["date", "tone_std", "tone_neg_share"]
+            art_keep = art_sample[sample_cols].drop_duplicates(subset=["date"])
+            out = out.merge(art_keep, on="date", how="left", suffixes=("", "_sample"))
+            out["tone_std"] = out["tone_std"].where(out["tone_std"].notna(), out["tone_std_sample"])
+            out["tone_neg_share"] = out["tone_neg_share"].where(
+                out["tone_neg_share"].notna(), out["tone_neg_share_sample"]
+            )
+            drop_cols = [c for c in ["tone_std_sample", "tone_neg_share_sample"] if c in out.columns]
+            if drop_cols:
+                out = out.drop(columns=drop_cols)
+
+    cols = ["date", "news_count", "tone_mean", "tone_std", "tone_neg_share"]
+    return out[cols].sort_values("date").reset_index(drop=True)
+
+
 def upsert_gdelt_daily(
     con: duckdb.DuckDBPyConnection,
     table: str,
@@ -357,12 +520,15 @@ def upsert_gdelt_daily(
     source: str = "gdelt_doc_api",
 ) -> int:
     """
-    Upsert daily GDELT aggregates into DuckDB by date primary key.
+    Upsert daily GDELT aggregates into DuckDB by (date, query_id) primary key.
     """
     if daily_df is None or daily_df.empty:
         return 0
 
     df2 = daily_df.copy()
+    if "query_id" not in df2.columns:
+        df2["query_id"] = "default"
+    df2["query_id"] = df2["query_id"].astype(str).replace("", "default")
     for c in ["news_count", "tone_mean", "tone_std", "tone_neg_share"]:
         if c not in df2.columns:
             df2[c] = np.nan
@@ -371,10 +537,10 @@ def upsert_gdelt_daily(
     con.register("tmp_gdelt_daily", df2)
     con.execute(
         f"""
-        INSERT INTO {table} (date, news_count, tone_mean, tone_std, tone_neg_share, source, inserted_at)
-        SELECT date, news_count, tone_mean, tone_std, tone_neg_share, source, inserted_at
+        INSERT INTO {table} (date, query_id, news_count, tone_mean, tone_std, tone_neg_share, source, inserted_at)
+        SELECT date, query_id, news_count, tone_mean, tone_std, tone_neg_share, source, inserted_at
         FROM tmp_gdelt_daily
-        ON CONFLICT (date) DO UPDATE SET
+        ON CONFLICT (date, query_id) DO UPDATE SET
             news_count = excluded.news_count,
             tone_mean = excluded.tone_mean,
             tone_std = excluded.tone_std,
@@ -403,17 +569,34 @@ def refresh_gdelt(cfg: GdeltIngestConfig, end: Optional[str] = None) -> dict:
         end_day = pd.to_datetime(end).date() if end else date.today()
         mode = str(cfg.mode).strip().lower()
         errors: dict[str, str] = {}
+        queries = _queries_from_cfg(cfg)
+        merged_rows: list[pd.DataFrame] = []
 
-        if mode == "timeline":
-            try:
-                merged = fetch_timeline_range(cfg, start_day, end_day)
-            except Exception as exc:
-                errors["timeline"] = str(exc)
-                merged = pd.DataFrame(columns=["date", "news_count", "tone_mean", "tone_std", "tone_neg_share"])
-        elif mode == "artlist":
-            merged, errors = fetch_artlist_range(cfg, start_day, end_day)
+        for query_id, query_text in queries.items():
+            if mode == "timeline":
+                try:
+                    q_df = fetch_timeline_range_for_query(cfg, start_day, end_day, query_text=query_text)
+                except Exception as exc:
+                    errors[f"{query_id}:timeline"] = str(exc)
+                    q_df = pd.DataFrame(columns=["date", "news_count", "tone_mean", "tone_std", "tone_neg_share"])
+            elif mode == "artlist":
+                q_df, q_errors = fetch_artlist_range_for_query(cfg, start_day, end_day, query_text=query_text)
+                for day_key, msg in q_errors.items():
+                    errors[f"{query_id}:{day_key}"] = msg
+            else:
+                raise ValueError(f"Unsupported gdelt.mode={cfg.mode!r}. Use 'timeline' or 'artlist'.")
+
+            if not q_df.empty:
+                q_df = q_df.copy()
+                q_df["query_id"] = str(query_id)
+                merged_rows.append(q_df)
+
+        if merged_rows:
+            merged = pd.concat(merged_rows, ignore_index=True)
         else:
-            raise ValueError(f"Unsupported gdelt.mode={cfg.mode!r}. Use 'timeline' or 'artlist'.")
+            merged = pd.DataFrame(
+                columns=["date", "query_id", "news_count", "tone_mean", "tone_std", "tone_neg_share"]
+            )
 
         inserted = upsert_gdelt_daily(con, cfg.table, merged, source="gdelt_doc_api")
         return {
@@ -422,7 +605,10 @@ def refresh_gdelt(cfg: GdeltIngestConfig, end: Optional[str] = None) -> dict:
             "start": start_day.isoformat(),
             "end": end_day.isoformat(),
             "days_queried": len(_iter_days(start_day, end_day)),
-            "days_with_news": int(merged.shape[0]),
+            "days_with_news": int(merged["date"].nunique()) if "date" in merged.columns else 0,
+            "rows_with_query": int(merged.shape[0]),
+            "query_count": len(queries),
+            "query_ids": sorted(list(queries.keys())),
             "mode": mode,
         }
     finally:

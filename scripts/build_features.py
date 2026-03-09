@@ -33,6 +33,12 @@ def main() -> int:
 
     db_path = src_cfg["db"]["path"]
     tickers = src_cfg["prices"]["tickers"]
+    gdelt_queries_cfg = src_cfg.get("gdelt", {}).get("queries", {})
+    news_query_ids = (
+        tuple(str(k).strip().lower() for k in gdelt_queries_cfg.keys() if str(k).strip())
+        if isinstance(gdelt_queries_cfg, dict)
+        else ()
+    )
 
     bcfg = BuildFeaturesConfig(
         db_path=db_path,
@@ -56,6 +62,7 @@ def main() -> int:
         news_include_roll_sum=bool(feat_cfg.get("news_features", {}).get("include_roll_sum", True)),
         news_include_roll_mean=bool(feat_cfg.get("news_features", {}).get("include_roll_mean", True)),
         news_include_roll_std=bool(feat_cfg.get("news_features", {}).get("include_roll_std", True)),
+        news_query_ids=news_query_ids,
     )
     print(build_features(bcfg, tickers=tickers))
 

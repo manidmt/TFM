@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Iterable
+import re
 
 import duckdb
 import pandas as pd
@@ -45,6 +46,7 @@ class BuildFeaturesConfig:
     news_include_roll_sum: bool = True
     news_include_roll_mean: bool = True
     news_include_roll_std: bool = True
+    news_query_ids: tuple[str, ...] = ()
 
 
 def _rolling_percentile_last(values: np.ndarray) -> float:
@@ -64,6 +66,14 @@ def _macro_transform(s: pd.Series, method: str) -> pd.Series:
         raise ValueError(f"Unknown macro transform method: {method}")
 
 
+def _sanitize_query_id(query_id: str) -> str:
+    """
+    Convert query_id to a safe lowercase suffix for feature names.
+    """
+    s = re.sub(r"[^a-zA-Z0-9]+", "_", str(query_id).strip().lower()).strip("_")
+    return s or "default"
+
+
 def _load_news_block(
     con: duckdb.DuckDBPyConnection,
     cfg: BuildFeaturesConfig,
@@ -76,70 +86,99 @@ def _load_news_block(
         return pd.DataFrame({"date": master_idx})
 
     try:
-        dfn = con.execute(
-            f"""
-            SELECT date, news_count, tone_mean, tone_std, tone_neg_share
-            FROM {cfg.gdelt_table}
-            ORDER BY date
-            """
-        ).df()
+        table_cols = [r[1] for r in con.execute(f"PRAGMA table_info('{cfg.gdelt_table}')").fetchall()]
+        has_query_id = "query_id" in table_cols
+        if has_query_id:
+            dfn = con.execute(
+                f"""
+                SELECT query_id, date, news_count, tone_mean, tone_std, tone_neg_share
+                FROM {cfg.gdelt_table}
+                ORDER BY query_id, date
+                """
+            ).df()
+        else:
+            dfn = con.execute(
+                f"""
+                SELECT 'default' AS query_id, date, news_count, tone_mean, tone_std, tone_neg_share
+                FROM {cfg.gdelt_table}
+                ORDER BY date
+                """
+            ).df()
     except Exception as exc:
         raise RuntimeError(
             f"GDELT table '{cfg.gdelt_table}' is unavailable while news_features.enabled=true."
         ) from exc
 
     out = pd.DataFrame({"date": master_idx})
+
+    configured_ids = [str(q).strip() for q in cfg.news_query_ids if str(q).strip()]
+    use_suffix = len(configured_ids) > 0
     if dfn.empty:
-        dfn = pd.DataFrame(
-            {
-                "date": master_idx,
-                "news_count": 0.0,
-                "tone_mean": 0.0,
-                "tone_std": 0.0,
-                "tone_neg_share": 0.0,
-            }
-        )
+        query_ids = configured_ids or ["default"]
+        dfn = pd.DataFrame({"query_id": query_ids})
     else:
+        dfn["query_id"] = dfn["query_id"].astype(str).map(_sanitize_query_id)
         dfn["date"] = pd.to_datetime(dfn["date"])
         dfn = (
-            dfn.groupby("date", as_index=False)
+            dfn.groupby(["query_id", "date"], as_index=False)
             .agg(
                 news_count=("news_count", "sum"),
                 tone_mean=("tone_mean", "mean"),
                 tone_std=("tone_std", "mean"),
                 tone_neg_share=("tone_neg_share", "mean"),
             )
-            .sort_values("date")
+            .sort_values(["query_id", "date"])
         )
-        dfn = dfn.set_index("date").reindex(master_idx).reset_index().rename(columns={"index": "date"})
-        dfn["news_count"] = pd.to_numeric(dfn["news_count"], errors="coerce").fillna(0.0)
-        dfn["tone_mean"] = pd.to_numeric(dfn["tone_mean"], errors="coerce").fillna(0.0)
-        dfn["tone_std"] = pd.to_numeric(dfn["tone_std"], errors="coerce").fillna(0.0)
-        dfn["tone_neg_share"] = pd.to_numeric(dfn["tone_neg_share"], errors="coerce").fillna(0.0)
-
-    lag_bdays = int(cfg.news_publication_lag_bdays)
-    if lag_bdays > 0:
-        for c in ["news_count", "tone_mean", "tone_std", "tone_neg_share"]:
-            dfn[c] = dfn[c].shift(lag_bdays)
+        query_ids = configured_ids or sorted(dfn["query_id"].unique().tolist())
 
     windows = tuple(sorted({int(w) for w in cfg.news_windows if int(w) > 0}))
     shock_window = max(windows) if windows else 20
-    roll_mu = dfn["news_count"].rolling(shock_window).mean()
-    roll_sd = dfn["news_count"].rolling(shock_window).std().replace(0.0, np.nan)
-    dfn["attention_shock_z"] = (dfn["news_count"] - roll_mu) / roll_sd
-
+    lag_bdays = int(cfg.news_publication_lag_bdays)
     base_cols = ["news_count", "tone_mean", "tone_std", "tone_neg_share", "attention_shock_z"]
-    for c in base_cols:
-        for w in windows:
-            roll = dfn[c].rolling(w)
-            if cfg.news_include_roll_sum:
-                dfn[f"{c}_sum_w{w}"] = roll.sum()
-            if cfg.news_include_roll_mean:
-                dfn[f"{c}_mean_w{w}"] = roll.mean()
-            if cfg.news_include_roll_std:
-                dfn[f"{c}_std_w{w}"] = roll.std()
 
-    out = out.merge(dfn, on="date", how="left")
+    for query_id in query_ids:
+        if dfn.empty or "date" not in dfn.columns:
+            sub = pd.DataFrame({"date": master_idx})
+            for c in ["news_count", "tone_mean", "tone_std", "tone_neg_share"]:
+                sub[c] = 0.0
+        else:
+            sub = dfn[dfn["query_id"] == query_id].copy()
+            sub = (
+                sub.set_index("date")
+                .reindex(master_idx)
+                .reset_index()
+                .rename(columns={"index": "date"})
+            )
+            sub["news_count"] = pd.to_numeric(sub["news_count"], errors="coerce").fillna(0.0)
+            sub["tone_mean"] = pd.to_numeric(sub["tone_mean"], errors="coerce").fillna(0.0)
+            sub["tone_std"] = pd.to_numeric(sub["tone_std"], errors="coerce").fillna(0.0)
+            sub["tone_neg_share"] = pd.to_numeric(sub["tone_neg_share"], errors="coerce").fillna(0.0)
+
+        if lag_bdays > 0:
+            for c in ["news_count", "tone_mean", "tone_std", "tone_neg_share"]:
+                sub[c] = sub[c].shift(lag_bdays)
+
+        roll_mu = sub["news_count"].rolling(shock_window).mean()
+        roll_sd = sub["news_count"].rolling(shock_window).std().replace(0.0, np.nan)
+        sub["attention_shock_z"] = (sub["news_count"] - roll_mu) / roll_sd
+
+        for c in base_cols:
+            for w in windows:
+                roll = sub[c].rolling(w)
+                if cfg.news_include_roll_sum:
+                    sub[f"{c}_sum_w{w}"] = roll.sum()
+                if cfg.news_include_roll_mean:
+                    sub[f"{c}_mean_w{w}"] = roll.mean()
+                if cfg.news_include_roll_std:
+                    sub[f"{c}_std_w{w}"] = roll.std()
+
+        cols_to_merge = [c for c in sub.columns if c != "date"]
+        if use_suffix:
+            suffix = _sanitize_query_id(query_id)
+            rename_map = {c: f"{c}_{suffix}" for c in cols_to_merge}
+            sub = sub.rename(columns=rename_map)
+        out = out.merge(sub, on="date", how="left")
+
     return out
     
 def build_features(cfg: BuildFeaturesConfig, tickers: Iterable[str]) -> dict:

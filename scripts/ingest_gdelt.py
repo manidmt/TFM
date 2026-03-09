@@ -40,6 +40,14 @@ def main() -> int:
 
     cfg = load_yaml(args.config)
     gdelt_cfg = cfg.get("gdelt", {})
+    queries_cfg = gdelt_cfg.get("queries")
+    queries = (
+        {str(k): str(v) for k, v in queries_cfg.items()}
+        if isinstance(queries_cfg, dict)
+        else None
+    )
+    if args.query:
+        queries = None
 
     db_path = args.db or cfg["db"]["path"]
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -53,6 +61,7 @@ def main() -> int:
         mode=str(gdelt_cfg.get("mode", "timeline")),
         keep_artlist_sample=bool(gdelt_cfg.get("keep_artlist_sample", False)),
         query=str(args.query or gdelt_cfg.get("query", "(finance OR market OR stocks OR bitcoin OR treasury)")),
+        queries=queries,
         max_records_per_day=int(gdelt_cfg.get("max_records_per_day", 250)),
         timeout_seconds=int(gdelt_cfg.get("timeout_seconds", 30)),
     )
