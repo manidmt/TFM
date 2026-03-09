@@ -34,6 +34,13 @@ features:
     volume_z_window: 20
     cross_corr_window: 20
 
+news_features:
+  enabled: false
+  windows: [3, 10, 20]
+  include_roll_sum: true
+  include_roll_mean: true
+  include_roll_std: true
+
 split:
   train_end: "2020-12-31"
   val_end: "2023-12-31"

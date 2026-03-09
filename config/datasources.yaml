@@ -21,3 +21,15 @@ macro:
     M2SL: m2
     DFF: ffr
     SOFR: sofr
+
+gdelt:
+  enabled: false
+  table: "gdelt_gkg_daily"
+  start: "2018-01-01"
+  lookback_buffer_days: 14
+  publication_lag_bdays: 1
+  mode: "timeline"
+  keep_artlist_sample: false
+  query: "(finance OR market OR stocks OR bitcoin OR treasury)"
+  max_records_per_day: 250
+  timeout_seconds: 30

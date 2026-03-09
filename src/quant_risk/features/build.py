@@ -22,6 +22,7 @@ class BuildFeaturesConfig:
     db_path: str
     prices_table: str = "raw_prices"
     macro_table: str = "macro_features"
+    gdelt_table: str = "gdelt_gkg_daily"
     out_table: str = "features_daily"
     calendar_freq: str = "B"  # Business day frequency
     start: str | None = None
@@ -38,6 +39,12 @@ class BuildFeaturesConfig:
     return_shock_quantiles: tuple[float, ...] = (0.8, 0.9)
     volume_z_window: int = 20
     cross_corr_window: int = 20
+    news_enabled: bool = False
+    news_publication_lag_bdays: int = 1
+    news_windows: tuple[int, ...] = (3, 10, 20)
+    news_include_roll_sum: bool = True
+    news_include_roll_mean: bool = True
+    news_include_roll_std: bool = True
 
 
 def _rolling_percentile_last(values: np.ndarray) -> float:
@@ -55,6 +62,85 @@ def _macro_transform(s: pd.Series, method: str) -> pd.Series:
         return np.log(s).diff()
     else:
         raise ValueError(f"Unknown macro transform method: {method}")
+
+
+def _load_news_block(
+    con: duckdb.DuckDBPyConnection,
+    cfg: BuildFeaturesConfig,
+    master_idx: pd.DatetimeIndex,
+) -> pd.DataFrame:
+    """
+    Build a date-aligned news feature block applying publication lag before rolling windows.
+    """
+    if not cfg.news_enabled:
+        return pd.DataFrame({"date": master_idx})
+
+    try:
+        dfn = con.execute(
+            f"""
+            SELECT date, news_count, tone_mean, tone_std, tone_neg_share
+            FROM {cfg.gdelt_table}
+            ORDER BY date
+            """
+        ).df()
+    except Exception as exc:
+        raise RuntimeError(
+            f"GDELT table '{cfg.gdelt_table}' is unavailable while news_features.enabled=true."
+        ) from exc
+
+    out = pd.DataFrame({"date": master_idx})
+    if dfn.empty:
+        dfn = pd.DataFrame(
+            {
+                "date": master_idx,
+                "news_count": 0.0,
+                "tone_mean": 0.0,
+                "tone_std": 0.0,
+                "tone_neg_share": 0.0,
+            }
+        )
+    else:
+        dfn["date"] = pd.to_datetime(dfn["date"])
+        dfn = (
+            dfn.groupby("date", as_index=False)
+            .agg(
+                news_count=("news_count", "sum"),
+                tone_mean=("tone_mean", "mean"),
+                tone_std=("tone_std", "mean"),
+                tone_neg_share=("tone_neg_share", "mean"),
+            )
+            .sort_values("date")
+        )
+        dfn = dfn.set_index("date").reindex(master_idx).reset_index().rename(columns={"index": "date"})
+        dfn["news_count"] = pd.to_numeric(dfn["news_count"], errors="coerce").fillna(0.0)
+        dfn["tone_mean"] = pd.to_numeric(dfn["tone_mean"], errors="coerce").fillna(0.0)
+        dfn["tone_std"] = pd.to_numeric(dfn["tone_std"], errors="coerce").fillna(0.0)
+        dfn["tone_neg_share"] = pd.to_numeric(dfn["tone_neg_share"], errors="coerce").fillna(0.0)
+
+    lag_bdays = int(cfg.news_publication_lag_bdays)
+    if lag_bdays > 0:
+        for c in ["news_count", "tone_mean", "tone_std", "tone_neg_share"]:
+            dfn[c] = dfn[c].shift(lag_bdays)
+
+    windows = tuple(sorted({int(w) for w in cfg.news_windows if int(w) > 0}))
+    shock_window = max(windows) if windows else 20
+    roll_mu = dfn["news_count"].rolling(shock_window).mean()
+    roll_sd = dfn["news_count"].rolling(shock_window).std().replace(0.0, np.nan)
+    dfn["attention_shock_z"] = (dfn["news_count"] - roll_mu) / roll_sd
+
+    base_cols = ["news_count", "tone_mean", "tone_std", "tone_neg_share", "attention_shock_z"]
+    for c in base_cols:
+        for w in windows:
+            roll = dfn[c].rolling(w)
+            if cfg.news_include_roll_sum:
+                dfn[f"{c}_sum_w{w}"] = roll.sum()
+            if cfg.news_include_roll_mean:
+                dfn[f"{c}_mean_w{w}"] = roll.mean()
+            if cfg.news_include_roll_std:
+                dfn[f"{c}_std_w{w}"] = roll.std()
+
+    out = out.merge(dfn, on="date", how="left")
+    return out
     
 def build_features(cfg: BuildFeaturesConfig, tickers: Iterable[str]) -> dict:
     con = duckdb.connect(cfg.db_path)
@@ -129,6 +215,7 @@ def build_features(cfg: BuildFeaturesConfig, tickers: Iterable[str]) -> dict:
                 dfm2[f"{tc}_lag{lag}"] = dfm2[tc].shift(lag)
 
         # Build per ticker features aligned to master calendar
+        news_block = _load_news_block(con, cfg, master_idx)
         all_out = []
         for t in tickers:
             sub = dfp[dfp["ticker"] == t].copy()
@@ -198,6 +285,8 @@ def build_features(cfg: BuildFeaturesConfig, tickers: Iterable[str]) -> dict:
 
             # Merge macro (already on master_idx)
             merged = sub.merge(dfm2, on="date", how="left")
+            if cfg.news_enabled:
+                merged = merged.merge(news_block, on="date", how="left")
 
             all_out.append(merged)
 
@@ -225,7 +314,17 @@ def build_features(cfg: BuildFeaturesConfig, tickers: Iterable[str]) -> dict:
         out = out.merge(cross, on="date", how="left")
 
         # Drop rows with insufficient history (basic)
-        min_lag = max(max(cfg.return_lags, default=0), max(cfg.macro_lags, default=0), max(cfg.rv_windows, default=0))
+        news_lag = 0
+        if cfg.news_enabled:
+            news_lag = int(cfg.news_publication_lag_bdays) + max(
+                [int(w) for w in cfg.news_windows if int(w) > 0] or [0]
+            )
+        min_lag = max(
+            max(cfg.return_lags, default=0),
+            max(cfg.macro_lags, default=0),
+            max(cfg.rv_windows, default=0),
+            news_lag,
+        )
         out = out.sort_values(["ticker", "date"])
         out["rownum"] = out.groupby("ticker").cumcount()
         out = out[out["rownum"] >= min_lag].drop(columns=["rownum"])

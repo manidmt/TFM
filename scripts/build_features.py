@@ -49,6 +49,13 @@ def main() -> int:
         return_shock_quantiles=tuple(feat_cfg.get("features", {}).get("shock_features", {}).get("return_shock_quantiles", [0.8, 0.9])),
         volume_z_window=int(feat_cfg.get("features", {}).get("shock_features", {}).get("volume_z_window", 20)),
         cross_corr_window=int(feat_cfg.get("features", {}).get("shock_features", {}).get("cross_corr_window", 20)),
+        gdelt_table=str(src_cfg.get("gdelt", {}).get("table", "gdelt_gkg_daily")),
+        news_enabled=bool(feat_cfg.get("news_features", {}).get("enabled", False)),
+        news_publication_lag_bdays=int(src_cfg.get("gdelt", {}).get("publication_lag_bdays", 1)),
+        news_windows=tuple(feat_cfg.get("news_features", {}).get("windows", [3, 10, 20])),
+        news_include_roll_sum=bool(feat_cfg.get("news_features", {}).get("include_roll_sum", True)),
+        news_include_roll_mean=bool(feat_cfg.get("news_features", {}).get("include_roll_mean", True)),
+        news_include_roll_std=bool(feat_cfg.get("news_features", {}).get("include_roll_std", True)),
     )
     print(build_features(bcfg, tickers=tickers))
 
