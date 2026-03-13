@@ -25,10 +25,18 @@ import pandas as pd
 import yaml
 from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import brier_score_loss, roc_auc_score
 
 from quant_risk.datasets.make_dataset import DatasetConfig, make_dataset
 from quant_risk.models.baseline import persistence_pred_from_regime
 from quant_risk.models.metrics import compute_metrics
+from quant_risk.models.tabular.gkg_change_detector import (
+    GkgChangeDetectorConfig,
+    build_design_matrix as build_gkg_change_design_matrix,
+    fit as fit_gkg_change_detector,
+    predict_proba as predict_proba_gkg_change_detector,
+    select_gkg_feature_columns,
+)
 from quant_risk.models.tabular.tabpfn import (
     TabPFNConfig,
     fit as fit_tabpfn,
@@ -725,6 +733,77 @@ def _parse_gate_thresholds(spec: str) -> tuple[float, ...]:
     return _parse_unit_interval_list(spec, name="gate_thresholds")
 
 
+def _parse_gkg_change_gate_thresholds(spec: str) -> tuple[float, ...]:
+    """@brief Parse sidecar p_change thresholds used to gate persistence vs chain."""
+    return _parse_unit_interval_list(spec, name="gkg_change_gate_thresholds")
+
+
+def _parse_gkg_change_alpha_weights(spec: str) -> tuple[float, ...]:
+    """@brief Parse sidecar p_change weights used to attenuate alpha."""
+    return _parse_unit_interval_list(spec, name="gkg_change_alpha_weights")
+
+
+def _parse_gkg_change_alpha_weights_by_asset(spec: str) -> dict[str, tuple[float, ...]]:
+    """@brief Parse asset-specific alpha-weight grids.
+
+    Syntax example:
+        `BTC-USD=0.0,0.1,0.2;TLT=0.0,0.05,0.1`
+
+    @param spec Semicolon-separated `asset=weights` assignments.
+    @return Mapping `{asset: weight_grid}`.
+    """
+    txt = str(spec).strip()
+    if not txt:
+        return {}
+    out: dict[str, tuple[float, ...]] = {}
+    for block in txt.split(";"):
+        block = block.strip()
+        if not block:
+            continue
+        if "=" not in block:
+            raise ValueError(
+                "gkg_change_alpha_weights_by_asset entries must use `asset=weights` syntax, "
+                f"got {block!r}"
+            )
+        asset_name, weight_spec = block.split("=", 1)
+        asset_key = str(asset_name).strip()
+        if not asset_key:
+            raise ValueError(
+                "gkg_change_alpha_weights_by_asset contains an empty asset key."
+            )
+        out[asset_key] = _parse_unit_interval_list(
+            weight_spec,
+            name=f"gkg_change_alpha_weights_by_asset[{asset_key}]",
+        )
+    return out
+
+
+def _resolve_asset_specific_grid(
+    *,
+    default_grid: tuple[float, ...],
+    asset_overrides: dict[str, tuple[float, ...]],
+    asset_name: str,
+    tickers: tuple[str, ...],
+) -> tuple[float, ...]:
+    """@brief Resolve an optional asset-specific grid override.
+
+    Resolution order:
+    1. `asset_name`
+    2. first matching ticker alias in `tickers`
+    3. `default_grid`
+
+    @param default_grid Fallback grid.
+    @param asset_overrides Optional asset-specific overrides.
+    @param asset_name Current asset/group identifier.
+    @param tickers Tickers included in current asset/group.
+    @return Selected grid for this asset.
+    """
+    for key in (str(asset_name), *tuple(str(t) for t in tickers)):
+        if key in asset_overrides:
+            return tuple(asset_overrides[key])
+    return tuple(default_grid)
+
+
 def _parse_class_threshold_grid(
     spec: str,
     *,
@@ -772,6 +851,21 @@ def _format_class_thresholds(v: np.ndarray | tuple[float, ...] | list[float]) ->
     """
     arr = np.asarray(v, dtype=float).reshape(-1)
     return "|".join(f"{x:.6g}" for x in arr)
+
+
+def _parse_csv_list(spec: Any) -> tuple[str, ...]:
+    """@brief Parse a comma-separated token list preserving order and uniqueness."""
+    if spec is None:
+        return ()
+    toks = [str(t).strip() for t in str(spec).split(",") if str(t).strip()]
+    out: list[str] = []
+    seen: set[str] = set()
+    for t in toks:
+        if t in seen:
+            continue
+        seen.add(t)
+        out.append(t)
+    return tuple(out)
 
 
 def _parse_class_thresholds(value: Any, *, n_classes: int = 3) -> np.ndarray:
@@ -933,6 +1027,168 @@ def _subset_macro_f1(y_true: np.ndarray, y_pred: np.ndarray, mask: np.ndarray) -
     return float(mm.macro_f1)
 
 
+def _safe_binary_auc(y_true_bin: np.ndarray, p_pos: np.ndarray) -> float:
+    """@brief Compute ROC-AUC for binary labels with safe fallbacks."""
+    y = np.asarray(y_true_bin, dtype=int).reshape(-1)
+    p = np.asarray(p_pos, dtype=float).reshape(-1)
+    if y.size == 0 or p.size == 0 or y.size != p.size:
+        return float("nan")
+    if int(np.unique(y).size) < 2:
+        return float("nan")
+    try:
+        return float(roc_auc_score(y, p))
+    except Exception:
+        return float("nan")
+
+
+def _safe_binary_brier(y_true_bin: np.ndarray, p_pos: np.ndarray) -> float:
+    """@brief Compute Brier score for binary labels with safe fallbacks."""
+    y = np.asarray(y_true_bin, dtype=int).reshape(-1)
+    p = np.asarray(p_pos, dtype=float).reshape(-1)
+    if y.size == 0 or p.size == 0 or y.size != p.size:
+        return float("nan")
+    try:
+        return float(brier_score_loss(y, p))
+    except Exception:
+        return float("nan")
+
+
+def _safe_nanmean(arr: np.ndarray | Sequence[float]) -> float:
+    """@brief Mean over finite values only, returning NaN when none exist."""
+    x = np.asarray(arr, dtype=float).reshape(-1)
+    if x.size == 0:
+        return float("nan")
+    x = x[np.isfinite(x)]
+    if x.size == 0:
+        return float("nan")
+    return float(np.mean(x))
+
+
+def _pick_sigma_t_from_matrix(
+    X: np.ndarray,
+    feature_cols: Sequence[str],
+) -> np.ndarray | None:
+    """@brief Extract a volatility context signal from the full feature matrix when present."""
+    cols = [str(c) for c in feature_cols]
+    candidates = ("sigma_t", "garch_sigma_t", "egarch_sigma_t", "gjrgarch_sigma_t")
+    idx = next((cols.index(c) for c in candidates if c in cols), None)
+    if idx is None:
+        return None
+    return np.asarray(X[:, idx], dtype=float)
+
+
+def _fit_eval_gkg_change_detector(
+    *,
+    feature_cols: Sequence[str],
+    x_train_aligned: np.ndarray,
+    y_train_target_aligned: np.ndarray,
+    regime_prev_train: np.ndarray,
+    persist_train_pred: np.ndarray,
+    x_eval_aligned: np.ndarray,
+    y_eval_target_aligned: np.ndarray,
+    regime_prev_eval: np.ndarray,
+    persist_eval_pred: np.ndarray,
+    model_type: str,
+    calibration_method: str,
+    context_cols: tuple[str, ...],
+    xgb_n_jobs: int,
+) -> dict[str, Any]:
+    """@brief Train/evaluate a GKG-only binary change detector with calibrated probabilities."""
+    y_train_change = (
+        np.asarray(y_train_target_aligned, dtype=int) != np.asarray(persist_train_pred, dtype=int)
+    ).astype(int)
+    y_eval_change = (
+        np.asarray(y_eval_target_aligned, dtype=int) != np.asarray(persist_eval_pred, dtype=int)
+    ).astype(int)
+
+    gkg_cols = select_gkg_feature_columns(feature_cols)
+    sigma_train = _pick_sigma_t_from_matrix(x_train_aligned, feature_cols)
+    sigma_eval = _pick_sigma_t_from_matrix(x_eval_aligned, feature_cols)
+    context_cols_eff = tuple(str(c) for c in context_cols)
+    if "sigma_t" in context_cols_eff and (sigma_train is None or sigma_eval is None):
+        context_cols_eff = tuple(c for c in context_cols_eff if c != "sigma_t")
+
+    X_train_change, used_feature_names = build_gkg_change_design_matrix(
+        X_all=np.asarray(x_train_aligned, dtype=np.float32),
+        feature_cols=feature_cols,
+        gkg_feature_cols=gkg_cols,
+        context_cols=context_cols_eff,
+        regime_prev=np.asarray(regime_prev_train, dtype=float),
+        sigma_t=sigma_train,
+    )
+    X_eval_change, _ = build_gkg_change_design_matrix(
+        X_all=np.asarray(x_eval_aligned, dtype=np.float32),
+        feature_cols=feature_cols,
+        gkg_feature_cols=gkg_cols,
+        context_cols=context_cols_eff,
+        regime_prev=np.asarray(regime_prev_eval, dtype=float),
+        sigma_t=sigma_eval,
+    )
+
+    if X_train_change.shape[1] == 0:
+        return {
+            "enabled": False,
+            "reason": "no_gkg_features",
+            "gkg_change_model": str(model_type).lower(),
+            "gkg_change_context_cols": ",".join(context_cols_eff),
+            "gkg_change_n_features": 0,
+            "gkg_change_feature_names": "",
+        }
+    if int(np.unique(y_train_change).size) < 2:
+        return {
+            "enabled": False,
+            "reason": "degenerate_train_target",
+            "gkg_change_model": str(model_type).lower(),
+            "gkg_change_context_cols": ",".join(context_cols_eff),
+            "gkg_change_n_features": int(X_train_change.shape[1]),
+            "gkg_change_feature_names": "|".join(used_feature_names),
+            "gkg_change_train_change_rate": float(np.mean(y_train_change)),
+        }
+
+    cfg = GkgChangeDetectorConfig(
+        model_type=str(model_type).lower(),
+        calibration_method=str(calibration_method).lower(),
+        random_state=42,
+        seed=42,
+        xgb_n_jobs=int(xgb_n_jobs),
+    )
+    artifacts = fit_gkg_change_detector(
+        cfg,
+        X_train_change,
+        y_train_change,
+        feature_names=tuple(used_feature_names),
+    )
+    proba_eval_change = predict_proba_gkg_change_detector(artifacts, X_eval_change)
+    p_change_eval = np.asarray(proba_eval_change[:, 1], dtype=float)
+    pred_change_eval = (p_change_eval >= 0.5).astype(int)
+    m = compute_metrics(y_eval_change, pred_change_eval)
+
+    return {
+        "enabled": True,
+        "reason": "ok",
+        "gkg_change_model": str(model_type).lower(),
+        "gkg_change_context_cols": ",".join(context_cols_eff),
+        "gkg_change_n_features": int(X_train_change.shape[1]),
+        "gkg_change_feature_names": "|".join(used_feature_names),
+        "gkg_change_train_change_rate": float(np.mean(y_train_change)),
+        "gkg_change_eval_change_rate": float(np.mean(y_eval_change)),
+        "gkg_change_eval_acc": float(m.accuracy),
+        "gkg_change_eval_macro_f1": float(m.macro_f1),
+        "gkg_change_eval_weighted_f1": float(m.weighted_f1),
+        "gkg_change_eval_macro_recall": float(m.macro_recall),
+        "gkg_change_eval_auc": _safe_binary_auc(y_eval_change, p_change_eval),
+        "gkg_change_eval_brier": _safe_binary_brier(y_eval_change, p_change_eval),
+        "gkg_change_eval_p_change_mean": float(np.mean(p_change_eval)),
+        "gkg_change_eval_p_change_std": float(np.std(p_change_eval)),
+        "gkg_change_eval_pred_change_rate": float(np.mean(pred_change_eval)),
+        "gkg_change_eval_p_no_change_mean": float(np.mean(1.0 - p_change_eval)),
+        "gkg_change_calibration_method": str(calibration_method).lower(),
+        "gkg_change_p_change_eval": p_change_eval.astype(float),
+        "gkg_change_y_eval": y_eval_change.astype(int),
+        "gkg_change_pred_eval": pred_change_eval.astype(int),
+    }
+
+
 def _blend_strategy_predict(
     proba_chain: np.ndarray,
     y_persist: np.ndarray,
@@ -940,6 +1196,9 @@ def _blend_strategy_predict(
     beta: float = 0.0,
     class_thresholds: np.ndarray | tuple[float, ...] | list[float] | None = None,
     gate_threshold: float = 0.0,
+    p_change: np.ndarray | None = None,
+    change_gate_threshold: float = 0.0,
+    change_alpha_weight: float = 0.0,
 ) -> dict[str, Any]:
     """@brief Predict with blend + confidence gating against persistence.
 
@@ -949,6 +1208,9 @@ def _blend_strategy_predict(
     @param beta Confidence-adaptive blend weight factor.
     @param class_thresholds Optional class-wise thresholds.
     @param gate_threshold Confidence threshold to route to persistence.
+    @param p_change Optional sidecar probability of regime change.
+    @param change_gate_threshold Threshold below which persistence is forced.
+    @param change_alpha_weight Weight used to attenuate alpha as a function of p_change.
     @return Prediction payload with labels, probabilities, and diagnostics.
     """
     p_chain = _normalize_proba_rows(proba_chain)
@@ -958,22 +1220,59 @@ def _blend_strategy_predict(
     persist_proba = _one_hot_probs(y_persist, n_classes=int(p_chain.shape[1]))
 
     if beta_c <= 0.0:
-        alpha_vec = np.full(len(p_chain), alpha_c, dtype=float)
+        alpha_vec_base = np.full(len(p_chain), alpha_c, dtype=float)
     else:
         conf_chain = np.max(p_chain, axis=1).astype(float)
-        alpha_vec = np.clip((1.0 - beta_c) * alpha_c + beta_c * conf_chain, 0.0, 1.0)
+        alpha_vec_base = np.clip((1.0 - beta_c) * alpha_c + beta_c * conf_chain, 0.0, 1.0)
+
+    if p_change is None:
+        p_change_vec = np.full(len(p_chain), np.nan, dtype=float)
+    else:
+        p_change_vec = np.asarray(p_change, dtype=float).reshape(-1)
+        if p_change_vec.shape[0] != p_chain.shape[0]:
+            raise ValueError(
+                "p_change length must match proba_chain rows: "
+                f"{p_change_vec.shape[0]} vs {p_chain.shape[0]}"
+            )
+        p_change_vec = np.nan_to_num(p_change_vec, nan=1.0, posinf=1.0, neginf=0.0)
+        p_change_vec = np.clip(p_change_vec, 0.0, 1.0)
+
+    change_alpha_w = float(np.clip(change_alpha_weight, 0.0, 1.0))
+    if np.all(np.isnan(p_change_vec)) or change_alpha_w <= 0.0:
+        change_alpha_multiplier = np.ones(len(p_chain), dtype=float)
+        alpha_vec = alpha_vec_base
+    else:
+        change_alpha_multiplier = np.clip(
+            (1.0 - change_alpha_w) + change_alpha_w * p_change_vec,
+            0.0,
+            1.0,
+        )
+        alpha_vec = np.clip(alpha_vec_base * change_alpha_multiplier, 0.0, 1.0)
 
     p_mix = alpha_vec[:, None] * p_chain + (1.0 - alpha_vec[:, None]) * persist_proba
     p_mix = _normalize_proba_rows(p_mix)
     pred_chain = _predict_with_class_thresholds(p_mix, class_thresholds=class_thresholds)
     conf_mix = np.max(p_mix, axis=1).astype(float)
-    gate_mask = conf_mix < gate_t
+    conf_gate_mask = conf_mix < gate_t
+
+    change_gate_t = float(np.clip(change_gate_threshold, 0.0, 1.0))
+    if np.all(np.isnan(p_change_vec)) or change_gate_t <= 0.0:
+        change_gate_mask = np.zeros(len(p_chain), dtype=bool)
+    else:
+        change_gate_mask = p_change_vec < change_gate_t
+
+    gate_mask = np.asarray(conf_gate_mask | change_gate_mask, dtype=bool)
     pred = np.where(gate_mask, np.asarray(y_persist, dtype=int), pred_chain).astype(int)
     return {
         "pred": pred,
         "alpha_vec": alpha_vec,
+        "alpha_vec_base": alpha_vec_base,
+        "change_alpha_multiplier": change_alpha_multiplier,
         "proba_mix": p_mix,
         "confidence": conf_mix,
+        "p_change": p_change_vec,
+        "conf_gate_mask": conf_gate_mask.astype(bool),
+        "change_gate_mask": change_gate_mask.astype(bool),
         "gate_mask": gate_mask.astype(bool),
     }
 
@@ -987,8 +1286,7 @@ def _safe_mean(x: list[float] | np.ndarray) -> float:
     arr = np.asarray(x, dtype=float).reshape(-1)
     if arr.size == 0:
         return float("nan")
-    with np.errstate(all="ignore"):
-        return float(np.nanmean(arr))
+    return _safe_nanmean(arr)
 
 
 def _aligned_split_with_persistence(
@@ -1089,6 +1387,9 @@ def _blend_metrics(
     beta: float = 0.0,
     class_thresholds: np.ndarray | tuple[float, ...] | list[float] | None = None,
     gate_threshold: float = 0.0,
+    p_change: np.ndarray | None = None,
+    change_gate_threshold: float = 0.0,
+    change_alpha_weight: float = 0.0,
 ) -> dict[str, float]:
     """@brief Compute blended model metrics and deltas vs persistence.
 
@@ -1102,6 +1403,9 @@ def _blend_metrics(
     @param beta Confidence beta.
     @param class_thresholds Optional class-wise thresholds.
     @param gate_threshold Confidence threshold for gating.
+    @param p_change Optional sidecar p_change probabilities.
+    @param change_gate_threshold Threshold below which persistence is forced by sidecar.
+    @param change_alpha_weight Weight used to attenuate alpha as a function of p_change.
     @return Dictionary with metrics, deltas, and prediction artifacts.
     """
     pred_info = _blend_strategy_predict(
@@ -1111,11 +1415,18 @@ def _blend_metrics(
         beta=beta,
         class_thresholds=class_thresholds,
         gate_threshold=gate_threshold,
+        p_change=p_change,
+        change_gate_threshold=change_gate_threshold,
+        change_alpha_weight=change_alpha_weight,
     )
     pred_target = np.asarray(pred_info["pred"], dtype=int)
     alpha_vec = np.asarray(pred_info["alpha_vec"], dtype=float)
+    change_alpha_multiplier = np.asarray(pred_info["change_alpha_multiplier"], dtype=float)
     conf = np.asarray(pred_info["confidence"], dtype=float)
     gate_mask = np.asarray(pred_info["gate_mask"], dtype=bool)
+    conf_gate_mask = np.asarray(pred_info["conf_gate_mask"], dtype=bool)
+    change_gate_mask = np.asarray(pred_info["change_gate_mask"], dtype=bool)
+    p_change_vec = np.asarray(pred_info["p_change"], dtype=float)
 
     m_target = compute_metrics(y_true_target, pred_target)
     target_high_vol_recall = _high_vol_recall(m_target)
@@ -1178,14 +1489,26 @@ def _blend_metrics(
             target_high_vol_recall - persist_target_metrics["high_vol_recall"]
         ),
         "mean_effective_alpha": float(np.mean(alpha_vec) if len(alpha_vec) else alpha),
+        "mean_change_alpha_multiplier": float(
+            np.mean(change_alpha_multiplier) if len(change_alpha_multiplier) else 1.0
+        ),
         "mean_confidence": float(np.mean(conf) if len(conf) else float("nan")),
         "gating_rate": float(np.mean(gate_mask.astype(float)) if len(gate_mask) else 0.0),
+        "confidence_gating_rate": float(
+            np.mean(conf_gate_mask.astype(float)) if len(conf_gate_mask) else 0.0
+        ),
+        "change_gating_rate": float(
+            np.mean(change_gate_mask.astype(float)) if len(change_gate_mask) else 0.0
+        ),
+        "mean_p_change": _safe_nanmean(p_change_vec),
         "selected_class_thresholds": _format_class_thresholds(
             np.ones(int(np.asarray(proba_chain).shape[1]), dtype=float)
             if class_thresholds is None
             else class_thresholds
         ),
         "selected_gate_threshold": float(np.clip(gate_threshold, 0.0, 1.0)),
+        "selected_change_gate_threshold": float(np.clip(change_gate_threshold, 0.0, 1.0)),
+        "selected_change_alpha_weight": float(np.clip(change_alpha_weight, 0.0, 1.0)),
         "transition_count": int(np.sum(transition_mask)),
         "transition_rate": float(np.mean(transition_mask.astype(float))),
         "transition_macro_f1": float(transition_macro_f1),
@@ -1219,6 +1542,10 @@ def _pick_best_blend_strategy(
     gate_thresholds: tuple[float, ...],
     persist_target_metrics: dict[str, float],
     persist_regime_metrics: dict[str, float],
+    p_change: np.ndarray | None = None,
+    change_gate_thresholds: tuple[float, ...] = (0.0,),
+    change_alpha_weights: tuple[float, ...] = (0.0,),
+    min_non_transition_delta: float = -1.0,
 ) -> tuple[dict[str, Any], dict[str, float]]:
     """@brief Select best blend/gating strategy on a grid.
 
@@ -1232,6 +1559,9 @@ def _pick_best_blend_strategy(
     @param gate_thresholds Candidate gating thresholds.
     @param persist_target_metrics Persistence metrics in target space.
     @param persist_regime_metrics Persistence metrics in regime space.
+    @param p_change Optional sidecar p_change probabilities aligned with `proba_chain`.
+    @param change_gate_thresholds Candidate p_change thresholds for persistence gating.
+    @param change_alpha_weights Candidate p_change weights to attenuate alpha.
     @return Tuple `(best_config, best_metrics)`.
     """
     best_cfg = {
@@ -1239,11 +1569,31 @@ def _pick_best_blend_strategy(
         "selected_beta": float(blend_conf_betas[0]),
         "selected_class_thresholds": np.ones(int(np.asarray(proba_chain).shape[1]), dtype=float),
         "selected_gate_threshold": float(gate_thresholds[0]),
+        "selected_change_gate_threshold": 0.0,
+        "selected_change_alpha_weight": 0.0,
     }
     best_metrics: dict[str, float] | None = None
-    best_score: tuple[float, float, float, float] | None = None
-    for alpha, beta, cls_thr, gate_thr in itertools.product(
-        blend_alphas, blend_conf_betas, class_threshold_grid, gate_thresholds
+    best_score: tuple[float, float, float, float, float] | None = None
+    best_any_metrics: dict[str, float] | None = None
+    best_any_score: tuple[float, float, float, float, float] | None = None
+    best_any_cfg = dict(best_cfg)
+    change_gate_grid = (
+        tuple(float(x) for x in change_gate_thresholds)
+        if p_change is not None
+        else (0.0,)
+    )
+    change_alpha_grid = (
+        tuple(float(x) for x in change_alpha_weights)
+        if p_change is not None
+        else (0.0,)
+    )
+    for alpha, beta, cls_thr, gate_thr, change_gate_thr, change_alpha_w in itertools.product(
+        blend_alphas,
+        blend_conf_betas,
+        class_threshold_grid,
+        gate_thresholds,
+        change_gate_grid,
+        change_alpha_grid,
     ):
         cand = _blend_metrics(
             proba_chain=proba_chain,
@@ -1256,16 +1606,36 @@ def _pick_best_blend_strategy(
             beta=float(beta),
             class_thresholds=np.asarray(cls_thr, dtype=float),
             gate_threshold=float(gate_thr),
+            p_change=p_change,
+            change_gate_threshold=float(change_gate_thr),
+            change_alpha_weight=float(change_alpha_w),
         )
         transition_delta = cand["delta_transition_macro_f1_vs_persistence"]
         if not np.isfinite(transition_delta):
             transition_delta = -1.0
+        non_transition_delta = cand["delta_non_transition_macro_f1_vs_persistence"]
+        if not np.isfinite(non_transition_delta):
+            non_transition_delta = -1.0
         score = (
             cand["delta_macro_f1_vs_persistence"],
+            float(non_transition_delta),
             float(transition_delta),
             cand["delta_high_vol_recall_vs_persistence"],
             cand["acc"],
         )
+        if best_any_score is None or score > best_any_score:
+            best_any_score = score
+            best_any_cfg = {
+                "selected_alpha": float(alpha),
+                "selected_beta": float(beta),
+                "selected_class_thresholds": np.asarray(cls_thr, dtype=float),
+                "selected_gate_threshold": float(gate_thr),
+                "selected_change_gate_threshold": float(change_gate_thr),
+                "selected_change_alpha_weight": float(change_alpha_w),
+            }
+            best_any_metrics = cand
+        if float(non_transition_delta) < float(min_non_transition_delta):
+            continue
         if best_score is None or score > best_score:
             best_score = score
             best_cfg = {
@@ -1273,8 +1643,13 @@ def _pick_best_blend_strategy(
                 "selected_beta": float(beta),
                 "selected_class_thresholds": np.asarray(cls_thr, dtype=float),
                 "selected_gate_threshold": float(gate_thr),
+                "selected_change_gate_threshold": float(change_gate_thr),
+                "selected_change_alpha_weight": float(change_alpha_w),
             }
             best_metrics = cand
+    if best_metrics is None:
+        best_cfg = best_any_cfg
+        best_metrics = best_any_metrics
     assert best_metrics is not None
     return best_cfg, best_metrics
 
@@ -1338,12 +1713,17 @@ def _prepare_fold_data(
     required_cache_keys = {
         "x_train",
         "y_train",
+        "x_train_aligned",
+        "y_train_aligned",
         "x_valid",
         "y_valid",
         "y_valid_regime",
+        "regime_prev_train",
         "regime_prev_valid",
+        "persist_train_pred",
         "persist_valid_pred",
         "persist_valid_regime_pred",
+        "feature_cols",
         "persist_valid_acc",
         "persist_valid_macro_f1",
         "persist_valid_weighted_f1",
@@ -1371,12 +1751,17 @@ def _prepare_fold_data(
             return {
                 "x_train": z["x_train"],
                 "y_train": z["y_train"],
+                "x_train_aligned": z["x_train_aligned"],
+                "y_train_aligned": z["y_train_aligned"],
                 "x_valid": z["x_valid"],
                 "y_valid": z["y_valid"],
                 "y_valid_regime": z["y_valid_regime"],
+                "regime_prev_train": z["regime_prev_train"],
                 "regime_prev_valid": z["regime_prev_valid"],
+                "persist_train_pred": np.asarray(z["persist_train_pred"], dtype=int),
                 "persist_valid_pred": np.asarray(z["persist_valid_pred"], dtype=int),
                 "persist_valid_regime_pred": np.asarray(z["persist_valid_regime_pred"], dtype=int),
+                "feature_cols": [str(c) for c in np.asarray(z["feature_cols"]).tolist()],
                 "persist_valid_acc": _scalar("persist_valid_acc"),
                 "persist_valid_macro_f1": _scalar("persist_valid_macro_f1"),
                 "persist_valid_weighted_f1": _scalar("persist_valid_weighted_f1"),
@@ -1419,9 +1804,22 @@ def _prepare_fold_data(
     )
     pack = make_dataset(dcfg)
 
-    x_train = pack["train"][pack["feature_cols"]].to_numpy(dtype=np.float32)
-    y_train = pack["train"]["regime"].to_numpy(dtype=int)
-    x_valid_full = pack["valid"][pack["feature_cols"]].to_numpy(dtype=np.float32)
+    feature_cols = list(pack["feature_cols"])
+    x_train_full = pack["train"][feature_cols].to_numpy(dtype=np.float32)
+    y_train_full = pack["train"]["regime"].to_numpy(dtype=int)
+    x_train = x_train_full
+    y_train = y_train_full
+    aligned_train = _aligned_split_with_persistence(
+        pack["df"],
+        pack["train"],
+        int(horizon),
+    )
+    keep_train = np.asarray(aligned_train["keep_mask"], dtype=bool)
+    x_train_aligned = x_train_full[keep_train]
+    y_train_aligned = y_train_full[keep_train]
+    regime_prev_train = np.asarray(aligned_train["regime_prev"], dtype=int)
+    persist_train_pred = np.asarray(aligned_train["y_target_persist"], dtype=int)
+    x_valid_full = pack["valid"][feature_cols].to_numpy(dtype=np.float32)
     y_valid_target_full = pack["valid"]["regime"].to_numpy(dtype=int)
     aligned_valid = _aligned_split_with_persistence(
         pack["df"],
@@ -1441,12 +1839,17 @@ def _prepare_fold_data(
     out = {
         "x_train": x_train,
         "y_train": y_train,
+        "x_train_aligned": x_train_aligned,
+        "y_train_aligned": y_train_aligned,
         "x_valid": x_valid,
         "y_valid": y_valid,
         "y_valid_regime": y_valid_regime,
+        "regime_prev_train": regime_prev_train,
         "regime_prev_valid": regime_prev_valid,
+        "persist_train_pred": persist_train_pred,
         "persist_valid_pred": persist_valid_pred,
         "persist_valid_regime_pred": persist_valid_regime_pred,
+        "feature_cols": feature_cols,
         "persist_valid_acc": float(p_metrics_regime["acc"]),
         "persist_valid_macro_f1": float(p_metrics_regime["macro_f1"]),
         "persist_valid_weighted_f1": float(p_metrics_regime["weighted_f1"]),
@@ -1466,12 +1869,17 @@ def _prepare_fold_data(
             cp,
             x_train=x_train,
             y_train=y_train,
+            x_train_aligned=x_train_aligned,
+            y_train_aligned=y_train_aligned,
             x_valid=x_valid,
             y_valid=y_valid,
             y_valid_regime=y_valid_regime,
+            regime_prev_train=regime_prev_train,
             regime_prev_valid=regime_prev_valid,
+            persist_train_pred=persist_train_pred,
             persist_valid_pred=persist_valid_pred,
             persist_valid_regime_pred=persist_valid_regime_pred,
+            feature_cols=np.asarray(feature_cols, dtype=str),
             persist_valid_acc=np.array([p_metrics_regime["acc"]], dtype=float),
             persist_valid_macro_f1=np.array([p_metrics_regime["macro_f1"]], dtype=float),
             persist_valid_weighted_f1=np.array([p_metrics_regime["weighted_f1"]], dtype=float),
@@ -1505,6 +1913,16 @@ def _fit_eval_tabular(
     calibration_method: str,
     class_threshold_grid: tuple[tuple[float, ...], ...],
     gate_thresholds: tuple[float, ...],
+    min_non_transition_delta: float,
+    use_gkg_change_detector: bool,
+    use_gkg_change_gate: bool,
+    use_gkg_change_alpha: bool,
+    gkg_change_model: str,
+    gkg_change_context_cols: tuple[str, ...],
+    gkg_change_calibration_method: str,
+    gkg_change_gate_thresholds: tuple[float, ...],
+    gkg_change_alpha_weights: tuple[float, ...],
+    gkg_change_blend_hook_weight: float,
 ) -> dict[str, Any]:
     """@brief Fit one tabular model and evaluate it on one fold.
 
@@ -1518,6 +1936,16 @@ def _fit_eval_tabular(
     @param calibration_method Probability calibration method.
     @param class_threshold_grid Candidate class-threshold vectors.
     @param gate_thresholds Candidate gating thresholds.
+    @param min_non_transition_delta Minimum accepted non-transition macro-F1 delta vs persistence.
+    @param use_gkg_change_detector Whether to train/evaluate the GKG change detector sidecar.
+    @param use_gkg_change_gate Whether to use sidecar `p_change` as an additional gate.
+    @param use_gkg_change_alpha Whether to use sidecar `p_change` to attenuate alpha.
+    @param gkg_change_model Binary model backend for change detector.
+    @param gkg_change_context_cols Optional minimal context columns (e.g., regime_prev, sigma_t).
+    @param gkg_change_calibration_method Calibration method for p_change.
+    @param gkg_change_gate_thresholds Candidate p_change thresholds for persistence gating.
+    @param gkg_change_alpha_weights Candidate p_change weights to attenuate alpha.
+    @param gkg_change_blend_hook_weight Placeholder weight for future gating/reweighting.
     @return Fold-level metrics and artifacts for model selection.
     """
     model_name = str(tabular_model).lower()
@@ -1594,49 +2022,106 @@ def _fit_eval_tabular(
         "macro_recall": fold_data["persist_valid_target_macro_recall"],
         "high_vol_recall": fold_data["persist_valid_target_high_vol_recall"],
     }
-    if bool(use_blend):
-        selected_cfg, best_m = _pick_best_blend_strategy(
-            proba_chain=proba_valid_cal,
-            y_true_target=fold_data["y_valid"],
-            y_persist_target=fold_data["persist_valid_pred"],
-            y_true_regime=fold_data["y_valid_regime"],
-            blend_alphas=blend_alphas,
-            blend_conf_betas=blend_conf_betas,
-            class_threshold_grid=class_threshold_grid,
-            gate_thresholds=gate_thresholds,
-            persist_target_metrics=persist_target_metrics,
-            persist_regime_metrics=persist_regime_metrics,
+
+    gkg_change_eval: dict[str, Any] = {
+        "enabled": False,
+        "reason": "disabled",
+        "gkg_change_model": str(gkg_change_model).lower(),
+        "gkg_change_context_cols": ",".join(gkg_change_context_cols),
+        "gkg_change_n_features": 0,
+        "gkg_change_feature_names": "",
+        "gkg_change_train_change_rate": float("nan"),
+        "gkg_change_eval_change_rate": float("nan"),
+        "gkg_change_eval_acc": float("nan"),
+        "gkg_change_eval_macro_f1": float("nan"),
+        "gkg_change_eval_weighted_f1": float("nan"),
+        "gkg_change_eval_macro_recall": float("nan"),
+        "gkg_change_eval_auc": float("nan"),
+        "gkg_change_eval_brier": float("nan"),
+        "gkg_change_eval_p_change_mean": float("nan"),
+        "gkg_change_eval_p_change_std": float("nan"),
+        "gkg_change_eval_pred_change_rate": float("nan"),
+        "gkg_change_eval_p_no_change_mean": float("nan"),
+        "gkg_change_calibration_method": str(gkg_change_calibration_method).lower(),
+        "gkg_change_p_change_eval": np.full(len(fold_data["y_valid"]), np.nan, dtype=float),
+        "gkg_change_y_eval": np.full(len(fold_data["y_valid"]), -1, dtype=int),
+        "gkg_change_pred_eval": np.full(len(fold_data["y_valid"]), -1, dtype=int),
+    }
+    if bool(use_gkg_change_detector):
+        gkg_change_eval = _fit_eval_gkg_change_detector(
+            feature_cols=tuple(fold_data["feature_cols"]),
+            x_train_aligned=np.asarray(fold_data["x_train_aligned"], dtype=np.float32),
+            y_train_target_aligned=np.asarray(fold_data["y_train_aligned"], dtype=int),
+            regime_prev_train=np.asarray(fold_data["regime_prev_train"], dtype=int),
+            persist_train_pred=np.asarray(fold_data["persist_train_pred"], dtype=int),
+            x_eval_aligned=np.asarray(fold_data["x_valid"], dtype=np.float32),
+            y_eval_target_aligned=np.asarray(fold_data["y_valid"], dtype=int),
+            regime_prev_eval=np.asarray(fold_data["regime_prev_valid"], dtype=int),
+            persist_eval_pred=np.asarray(fold_data["persist_valid_pred"], dtype=int),
+            model_type=str(gkg_change_model).lower(),
+            calibration_method=str(gkg_change_calibration_method).lower(),
+            context_cols=tuple(gkg_change_context_cols),
+            xgb_n_jobs=int(xgb_n_jobs),
         )
-        selected_alpha = float(selected_cfg["selected_alpha"])
-        selected_beta = float(selected_cfg["selected_beta"])
-        selected_class_thresholds = _parse_class_thresholds(
-            selected_cfg["selected_class_thresholds"],
-            n_classes=int(np.asarray(proba_valid_cal).shape[1]),
-        )
-        selected_gate_threshold = float(selected_cfg["selected_gate_threshold"])
-    else:
-        selected_alpha = 1.0
-        selected_beta = 0.0
-        selected_class_thresholds = np.ones(int(np.asarray(proba_valid_cal).shape[1]), dtype=float)
-        selected_gate_threshold = 0.0
-        best_m = _blend_metrics(
-            proba_chain=proba_valid_cal,
-            y_true_target=fold_data["y_valid"],
-            y_persist_target=fold_data["persist_valid_pred"],
-            y_true_regime=fold_data["y_valid_regime"],
-            persist_target_metrics=persist_target_metrics,
-            persist_regime_metrics=persist_regime_metrics,
-            alpha=1.0,
-            beta=0.0,
-            class_thresholds=selected_class_thresholds,
-            gate_threshold=selected_gate_threshold,
-        )
+
+    p_change_valid = (
+        np.asarray(gkg_change_eval["gkg_change_p_change_eval"], dtype=float)
+        if bool(use_gkg_change_gate or use_gkg_change_alpha)
+        and bool(gkg_change_eval.get("enabled", False))
+        else None
+    )
+    n_classes = int(np.asarray(proba_valid_cal).shape[1])
+    blend_alphas_eff = blend_alphas if bool(use_blend) else (1.0,)
+    blend_conf_betas_eff = blend_conf_betas if bool(use_blend) else (0.0,)
+    class_threshold_grid_eff = (
+        class_threshold_grid
+        if bool(use_blend)
+        else (tuple(np.ones(n_classes, dtype=float).tolist()),)
+    )
+    gate_thresholds_eff = gate_thresholds if bool(use_blend) else (0.0,)
+    change_gate_thresholds_eff = (
+        gkg_change_gate_thresholds if bool(use_gkg_change_gate) else (0.0,)
+    )
+    change_alpha_weights_eff = (
+        gkg_change_alpha_weights if bool(use_gkg_change_alpha) else (0.0,)
+    )
+    selected_cfg, best_m = _pick_best_blend_strategy(
+        proba_chain=proba_valid_cal,
+        y_true_target=fold_data["y_valid"],
+        y_persist_target=fold_data["persist_valid_pred"],
+        y_true_regime=fold_data["y_valid_regime"],
+        blend_alphas=blend_alphas_eff,
+        blend_conf_betas=blend_conf_betas_eff,
+        class_threshold_grid=class_threshold_grid_eff,
+        gate_thresholds=gate_thresholds_eff,
+        persist_target_metrics=persist_target_metrics,
+        persist_regime_metrics=persist_regime_metrics,
+        p_change=p_change_valid,
+        change_gate_thresholds=change_gate_thresholds_eff,
+        change_alpha_weights=change_alpha_weights_eff,
+        min_non_transition_delta=float(min_non_transition_delta),
+    )
+    selected_alpha = float(selected_cfg["selected_alpha"])
+    selected_beta = float(selected_cfg["selected_beta"])
+    selected_class_thresholds = _parse_class_thresholds(
+        selected_cfg["selected_class_thresholds"],
+        n_classes=n_classes,
+    )
+    selected_gate_threshold = float(selected_cfg["selected_gate_threshold"])
+    selected_change_gate_threshold = float(
+        np.clip(selected_cfg.get("selected_change_gate_threshold", 0.0), 0.0, 1.0)
+    )
+    selected_change_alpha_weight = float(
+        np.clip(selected_cfg.get("selected_change_alpha_weight", 0.0), 0.0, 1.0)
+    )
 
     return {
         "selected_alpha": float(selected_alpha),
         "selected_beta": float(selected_beta),
         "selected_class_thresholds": _format_class_thresholds(selected_class_thresholds),
         "selected_gate_threshold": float(selected_gate_threshold),
+        "selected_change_gate_threshold": float(selected_change_gate_threshold),
+        "selected_change_alpha_weight": float(selected_change_alpha_weight),
         "calibration_method": str(calibration_method).lower(),
         "valid_acc": float(best_m["acc"]),
         "valid_macro_f1": float(best_m["macro_f1"]),
@@ -1651,8 +2136,12 @@ def _fit_eval_tabular(
             best_m["delta_high_vol_recall_vs_persistence"]
         ),
         "mean_effective_alpha": float(best_m["mean_effective_alpha"]),
+        "mean_change_alpha_multiplier": float(best_m["mean_change_alpha_multiplier"]),
         "mean_confidence": float(best_m["mean_confidence"]),
         "gating_rate": float(best_m["gating_rate"]),
+        "confidence_gating_rate": float(best_m["confidence_gating_rate"]),
+        "change_gating_rate": float(best_m["change_gating_rate"]),
+        "mean_p_change": float(best_m["mean_p_change"]),
         "transition_count": int(best_m["transition_count"]),
         "transition_rate": float(best_m["transition_rate"]),
         "transition_macro_f1": float(best_m["transition_macro_f1"]),
@@ -1700,6 +2189,32 @@ def _fit_eval_tabular(
         "persist_valid_target_high_vol_recall": float(
             fold_data["persist_valid_target_high_vol_recall"]
         ),
+        "gkg_change_enabled": bool(gkg_change_eval["enabled"]),
+        "gkg_change_reason": str(gkg_change_eval["reason"]),
+        "gkg_change_model": str(gkg_change_eval["gkg_change_model"]),
+        "gkg_change_context_cols": str(gkg_change_eval["gkg_change_context_cols"]),
+        "gkg_change_n_features": int(gkg_change_eval["gkg_change_n_features"]),
+        "gkg_change_feature_names": str(gkg_change_eval["gkg_change_feature_names"]),
+        "gkg_change_train_change_rate": float(gkg_change_eval["gkg_change_train_change_rate"]),
+        "gkg_change_eval_change_rate": float(gkg_change_eval["gkg_change_eval_change_rate"]),
+        "gkg_change_eval_acc": float(gkg_change_eval["gkg_change_eval_acc"]),
+        "gkg_change_eval_macro_f1": float(gkg_change_eval["gkg_change_eval_macro_f1"]),
+        "gkg_change_eval_weighted_f1": float(gkg_change_eval["gkg_change_eval_weighted_f1"]),
+        "gkg_change_eval_macro_recall": float(gkg_change_eval["gkg_change_eval_macro_recall"]),
+        "gkg_change_eval_auc": float(gkg_change_eval["gkg_change_eval_auc"]),
+        "gkg_change_eval_brier": float(gkg_change_eval["gkg_change_eval_brier"]),
+        "gkg_change_eval_p_change_mean": float(gkg_change_eval["gkg_change_eval_p_change_mean"]),
+        "gkg_change_eval_p_change_std": float(gkg_change_eval["gkg_change_eval_p_change_std"]),
+        "gkg_change_eval_pred_change_rate": float(
+            gkg_change_eval["gkg_change_eval_pred_change_rate"]
+        ),
+        "gkg_change_eval_p_no_change_mean": float(
+            gkg_change_eval["gkg_change_eval_p_no_change_mean"]
+        ),
+        "gkg_change_calibration_method": str(gkg_change_eval["gkg_change_calibration_method"]),
+        "use_gkg_change_gate": bool(use_gkg_change_gate),
+        "use_gkg_change_alpha": bool(use_gkg_change_alpha),
+        "gkg_change_blend_hook_weight": float(gkg_change_blend_hook_weight),
         "proba_valid": np.asarray(proba_valid_cal, dtype=float),
         "y_valid": np.asarray(fold_data["y_valid"], dtype=int),
         "y_valid_regime": np.asarray(fold_data["y_valid_regime"], dtype=int),
@@ -1708,6 +2223,9 @@ def _fit_eval_tabular(
         "persist_valid_regime_pred": np.asarray(
             fold_data["persist_valid_regime_pred"], dtype=int
         ),
+        "gkg_change_p_change_eval": np.asarray(gkg_change_eval["gkg_change_p_change_eval"], dtype=float),
+        "gkg_change_y_eval": np.asarray(gkg_change_eval["gkg_change_y_eval"], dtype=int),
+        "gkg_change_pred_eval": np.asarray(gkg_change_eval["gkg_change_pred_eval"], dtype=int),
     }
 
 
@@ -1729,6 +2247,15 @@ def _official_test_compare(
     blend_class_thresholds: np.ndarray | tuple[float, ...] | list[float],
     blend_gate_threshold: float,
     calibration_method: str,
+    use_gkg_change_detector: bool,
+    use_gkg_change_gate: bool,
+    use_gkg_change_alpha: bool,
+    gkg_change_model: str,
+    gkg_change_context_cols: tuple[str, ...],
+    gkg_change_calibration_method: str,
+    gkg_change_gate_threshold: float,
+    gkg_change_alpha_weight: float,
+    gkg_change_blend_hook_weight: float,
 ) -> dict[str, Any]:
     """@brief Run final official test evaluation against persistence.
 
@@ -1748,6 +2275,15 @@ def _official_test_compare(
     @param blend_class_thresholds Selected class thresholds.
     @param blend_gate_threshold Selected gating threshold.
     @param calibration_method Probability calibration method.
+    @param use_gkg_change_detector Whether to evaluate sidecar GKG change detector.
+    @param use_gkg_change_gate Whether to use the sidecar as an additional persistence gate.
+    @param use_gkg_change_alpha Whether to use the sidecar to attenuate alpha.
+    @param gkg_change_model Backend for change detector.
+    @param gkg_change_context_cols Context columns for change detector.
+    @param gkg_change_calibration_method Calibration method for p_change.
+    @param gkg_change_gate_threshold Selected p_change threshold for gating.
+    @param gkg_change_alpha_weight Selected p_change weight to attenuate alpha.
+    @param gkg_change_blend_hook_weight Placeholder blend hook weight for future use.
     @return Final test metrics and deltas versus persistence.
     """
     dcfg = DatasetConfig(
@@ -1777,11 +2313,12 @@ def _official_test_compare(
     )
     pack = make_dataset(dcfg)
 
-    x_train = pack["train"][pack["feature_cols"]].to_numpy(dtype=np.float32)
+    feature_cols = list(pack["feature_cols"])
+    x_train = pack["train"][feature_cols].to_numpy(dtype=np.float32)
     y_train = pack["train"]["regime"].to_numpy(dtype=int)
-    x_valid = pack["valid"][pack["feature_cols"]].to_numpy(dtype=np.float32)
+    x_valid = pack["valid"][feature_cols].to_numpy(dtype=np.float32)
     y_valid = pack["valid"]["regime"].to_numpy(dtype=int)
-    x_test = pack["test"][pack["feature_cols"]].to_numpy(dtype=np.float32)
+    x_test = pack["test"][feature_cols].to_numpy(dtype=np.float32)
     y_test_target = pack["test"]["regime"].to_numpy(dtype=int)
 
     model_name = str(tabular_model).lower()
@@ -1828,12 +2365,22 @@ def _official_test_compare(
         pack["test"],
         int(horizon),
     )
+    aligned_train = _aligned_split_with_persistence(
+        pack["df"],
+        pack["train"],
+        int(horizon),
+    )
     keep_test = np.asarray(aligned_test["keep_mask"], dtype=bool)
     x_test_eval = x_test[keep_test]
     y_test_target_eval = y_test_target[keep_test]
     y_test_regime = np.asarray(aligned_test["y_regime_true"], dtype=int)
     regime_prev_test = np.asarray(aligned_test["regime_prev"], dtype=int)
     y_persist_test_target = np.asarray(aligned_test["y_target_persist"], dtype=int)
+    keep_train_change = np.asarray(aligned_train["keep_mask"], dtype=bool)
+    x_train_aligned_change = x_train[keep_train_change]
+    y_train_aligned_change = y_train[keep_train_change]
+    regime_prev_train_change = np.asarray(aligned_train["regime_prev"], dtype=int)
+    y_persist_train_change = np.asarray(aligned_train["y_target_persist"], dtype=int)
     p_metrics_regime = aligned_test["regime_persistence_metrics"]
     p_metrics_target = aligned_test["target_persistence_metrics"]
 
@@ -1857,6 +2404,49 @@ def _official_test_compare(
     else:
         alpha = 1.0
         beta = 0.0
+    gkg_change_test_eval: dict[str, Any] = {
+        "enabled": False,
+        "reason": "disabled",
+        "gkg_change_model": str(gkg_change_model).lower(),
+        "gkg_change_context_cols": ",".join(gkg_change_context_cols),
+        "gkg_change_n_features": 0,
+        "gkg_change_feature_names": "",
+        "gkg_change_eval_change_rate": float("nan"),
+        "gkg_change_eval_acc": float("nan"),
+        "gkg_change_eval_macro_f1": float("nan"),
+        "gkg_change_eval_weighted_f1": float("nan"),
+        "gkg_change_eval_macro_recall": float("nan"),
+        "gkg_change_eval_auc": float("nan"),
+        "gkg_change_eval_brier": float("nan"),
+        "gkg_change_eval_p_change_mean": float("nan"),
+        "gkg_change_eval_p_change_std": float("nan"),
+        "gkg_change_eval_pred_change_rate": float("nan"),
+        "gkg_change_eval_p_no_change_mean": float("nan"),
+        "gkg_change_calibration_method": str(gkg_change_calibration_method).lower(),
+    }
+    if bool(use_gkg_change_detector):
+        gkg_change_test_eval = _fit_eval_gkg_change_detector(
+            feature_cols=tuple(feature_cols),
+            x_train_aligned=np.asarray(x_train_aligned_change, dtype=np.float32),
+            y_train_target_aligned=np.asarray(y_train_aligned_change, dtype=int),
+            regime_prev_train=np.asarray(regime_prev_train_change, dtype=int),
+            persist_train_pred=np.asarray(y_persist_train_change, dtype=int),
+            x_eval_aligned=np.asarray(x_test_eval, dtype=np.float32),
+            y_eval_target_aligned=np.asarray(y_test_target_eval, dtype=int),
+            regime_prev_eval=np.asarray(regime_prev_test, dtype=int),
+            persist_eval_pred=np.asarray(y_persist_test_target, dtype=int),
+            model_type=str(gkg_change_model).lower(),
+            calibration_method=str(gkg_change_calibration_method).lower(),
+            context_cols=tuple(gkg_change_context_cols),
+            xgb_n_jobs=int(xgb_n_jobs),
+        )
+
+    p_change_test = (
+        np.asarray(gkg_change_test_eval.get("gkg_change_p_change_eval"), dtype=float)
+        if bool(use_gkg_change_gate or use_gkg_change_alpha)
+        and bool(gkg_change_test_eval.get("enabled", False))
+        else None
+    )
     pred_info = _blend_strategy_predict(
         proba_chain=proba_test_cal,
         y_persist=y_persist_test_target,
@@ -1864,18 +2454,27 @@ def _official_test_compare(
         beta=beta,
         class_thresholds=class_thresholds,
         gate_threshold=float(blend_gate_threshold),
+        p_change=p_change_test,
+        change_gate_threshold=float(gkg_change_gate_threshold),
+        change_alpha_weight=float(gkg_change_alpha_weight),
     )
     pred_test = np.asarray(pred_info["pred"], dtype=int)
     alpha_vec = np.asarray(pred_info["alpha_vec"], dtype=float)
+    change_alpha_multiplier = np.asarray(pred_info["change_alpha_multiplier"], dtype=float)
     conf_test = np.asarray(pred_info["confidence"], dtype=float)
     gate_mask = np.asarray(pred_info["gate_mask"], dtype=bool)
+    conf_gate_mask = np.asarray(pred_info["conf_gate_mask"], dtype=bool)
+    change_gate_mask = np.asarray(pred_info["change_gate_mask"], dtype=bool)
+    p_change_vec = np.asarray(pred_info["p_change"], dtype=float)
 
     m_chain_target = compute_metrics(y_test_target_eval, pred_test)
     chain_target_high_vol_recall = _high_vol_recall(m_chain_target)
     pred_test_regime = np.asarray(pred_test, dtype=int)
     m_chain_regime = compute_metrics(y_test_regime, pred_test_regime)
     chain_regime_high_vol_recall = _high_vol_recall(m_chain_regime)
-    transition_mask = np.asarray(y_test_regime, dtype=int) != np.asarray(y_persist_test_target, dtype=int)
+    transition_mask = (
+        np.asarray(y_test_regime, dtype=int) != np.asarray(y_persist_test_target, dtype=int)
+    )
     non_transition_mask = ~transition_mask
     transition_macro_f1 = _subset_macro_f1(y_test_regime, pred_test_regime, transition_mask)
     transition_persist_macro_f1 = _subset_macro_f1(
@@ -1893,10 +2492,22 @@ def _official_test_compare(
         "selected_blend_beta": beta,
         "selected_class_thresholds": _format_class_thresholds(class_thresholds),
         "selected_gate_threshold": float(np.clip(blend_gate_threshold, 0.0, 1.0)),
+        "selected_change_gate_threshold": float(np.clip(gkg_change_gate_threshold, 0.0, 1.0)),
+        "selected_change_alpha_weight": float(np.clip(gkg_change_alpha_weight, 0.0, 1.0)),
         "calibration_method": str(calibration_method).lower(),
         "mean_effective_alpha_test": float(np.mean(alpha_vec) if len(alpha_vec) else alpha),
+        "mean_change_alpha_multiplier_test": float(
+            np.mean(change_alpha_multiplier) if len(change_alpha_multiplier) else 1.0
+        ),
         "mean_confidence_test": float(np.mean(conf_test) if len(conf_test) else float("nan")),
         "gating_rate_test": float(np.mean(gate_mask.astype(float)) if len(gate_mask) else 0.0),
+        "confidence_gating_rate_test": float(
+            np.mean(conf_gate_mask.astype(float)) if len(conf_gate_mask) else 0.0
+        ),
+        "change_gating_rate_test": float(
+            np.mean(change_gate_mask.astype(float)) if len(change_gate_mask) else 0.0
+        ),
+        "mean_p_change_test": _safe_nanmean(p_change_vec),
         "chain_test_acc": float(m_chain_regime.accuracy),
         "chain_test_macro_f1": float(m_chain_regime.macro_f1),
         "chain_test_weighted_f1": float(m_chain_regime.weighted_f1),
@@ -1964,8 +2575,33 @@ def _official_test_compare(
         )
         if np.isfinite(non_transition_macro_f1) and np.isfinite(non_transition_persist_macro_f1)
         else float("nan"),
+        "gkg_change_enabled_test": bool(gkg_change_test_eval.get("enabled", False)),
+        "gkg_change_reason_test": str(gkg_change_test_eval.get("reason", "")),
+        "gkg_change_model_test": str(gkg_change_test_eval.get("gkg_change_model", "")),
+        "gkg_change_context_cols_test": str(
+            gkg_change_test_eval.get("gkg_change_context_cols", "")
+        ),
+        "gkg_change_n_features_test": int(gkg_change_test_eval.get("gkg_change_n_features", 0)),
+        "gkg_change_macro_f1_test": float(
+            gkg_change_test_eval.get("gkg_change_eval_macro_f1", np.nan)
+        ),
+        "gkg_change_auc_test": float(gkg_change_test_eval.get("gkg_change_eval_auc", np.nan)),
+        "gkg_change_brier_test": float(
+            gkg_change_test_eval.get("gkg_change_eval_brier", np.nan)
+        ),
+        "gkg_change_p_change_mean_test": float(
+            gkg_change_test_eval.get("gkg_change_eval_p_change_mean", np.nan)
+        ),
+        "gkg_change_pred_change_rate_test": float(
+            gkg_change_test_eval.get("gkg_change_eval_pred_change_rate", np.nan)
+        ),
+        "gkg_change_calibration_method_test": str(
+            gkg_change_test_eval.get("gkg_change_calibration_method", "")
+        ),
+        "use_gkg_change_alpha": bool(use_gkg_change_alpha),
+        "gkg_change_blend_hook_weight": float(gkg_change_blend_hook_weight),
         "n_test_eval": int(len(y_test_regime)),
-        "n_features": int(len(pack["feature_cols"])),
+        "n_features": int(len(feature_cols)),
     }
 
 
@@ -2015,6 +2651,18 @@ def main() -> int:
     parser.add_argument("--min_folds_ok", type=int, default=2)
     parser.add_argument("--min_positive_rate", type=float, default=0.5)
     parser.add_argument(
+        "--min_non_transition_delta",
+        type=float,
+        default=-0.02,
+        help="Minimum mean delta of non-transition macro F1 (chain - persistence).",
+    )
+    parser.add_argument(
+        "--non_transition_penalty_lambda",
+        type=float,
+        default=1.0,
+        help="Penalty weight when mean non-transition delta falls below --min_non_transition_delta.",
+    )
+    parser.add_argument(
         "--min_high_vol_recall_delta",
         type=float,
         default=0.0,
@@ -2032,6 +2680,63 @@ def main() -> int:
         default="v2",
         choices=["v2", "v2.5"],
         help="TabPFN checkpoint family to use.",
+    )
+    parser.add_argument(
+        "--use_gkg_change_detector",
+        action="store_true",
+        help="Enable a sidecar binary detector (change/no-change) using only GKG-derived features.",
+    )
+    parser.add_argument(
+        "--gkg_change_model",
+        default="logit",
+        choices=["logit", "xgb", "tabpfn"],
+        help="Backend for the GKG change detector (tabpfn reserved for future extension).",
+    )
+    parser.add_argument(
+        "--gkg_change_context_cols",
+        default="regime_prev",
+        help="Comma-separated optional context columns for change detector: regime_prev,sigma_t",
+    )
+    parser.add_argument(
+        "--gkg_change_calibration_method",
+        default="none",
+        choices=["none", "platt", "isotonic"],
+        help="Calibration method for p_change probabilities.",
+    )
+    parser.add_argument(
+        "--gkg_change_blend_hook_weight",
+        type=float,
+        default=0.0,
+        help="Reserved weight for future blend/gating integration using p_change.",
+    )
+    parser.add_argument(
+        "--use_gkg_change_gate",
+        action="store_true",
+        help="Use sidecar p_change as an additional gate: low p_change routes to persistence.",
+    )
+    parser.add_argument(
+        "--use_gkg_change_alpha",
+        action="store_true",
+        help="Use sidecar p_change to attenuate alpha directly inside the chain/persistence blend.",
+    )
+    parser.add_argument(
+        "--gkg_change_gate_thresholds",
+        default="0.0,0.40,0.50,0.60,0.70",
+        help="Comma-separated p_change thresholds for persistence gating.",
+    )
+    parser.add_argument(
+        "--gkg_change_alpha_weights",
+        default="0.0,0.25,0.5,0.75,1.0",
+        help="Comma-separated weights used to attenuate alpha as alpha*((1-w)+w*p_change).",
+    )
+    parser.add_argument(
+        "--gkg_change_alpha_weights_by_asset",
+        default="",
+        help=(
+            "Optional semicolon-separated asset overrides, e.g. "
+            "'BTC-USD=0.0,0.1,0.2;TLT=0.0,0.05,0.1'. "
+            "When present, each asset uses its own alpha-weight grid."
+        ),
     )
     parser.add_argument("--use_blend", action="store_true")
     parser.add_argument(
@@ -2078,7 +2783,37 @@ def main() -> int:
     blend_alphas = _parse_blend_alphas(args.blend_alphas)
     blend_conf_betas = _parse_blend_conf_betas(args.blend_conf_betas)
     gate_thresholds = _parse_gate_thresholds(args.gate_thresholds)
+    gkg_change_gate_thresholds = _parse_gkg_change_gate_thresholds(
+        args.gkg_change_gate_thresholds
+    )
+    gkg_change_alpha_weights = _parse_gkg_change_alpha_weights(
+        args.gkg_change_alpha_weights
+    )
+    gkg_change_alpha_weights_by_asset = _parse_gkg_change_alpha_weights_by_asset(
+        args.gkg_change_alpha_weights_by_asset
+    )
     class_threshold_grid = _parse_class_threshold_grid(args.class_threshold_grid, n_classes=3)
+    gkg_change_context_cols = _parse_csv_list(args.gkg_change_context_cols)
+    valid_change_context = {"regime_prev", "sigma_t"}
+    invalid_change_context = [c for c in gkg_change_context_cols if c not in valid_change_context]
+    if invalid_change_context:
+        raise SystemExit(
+            "Invalid --gkg_change_context_cols entries: "
+            f"{invalid_change_context}. Allowed: {sorted(valid_change_context)}"
+        )
+    if bool(args.use_gkg_change_detector) and str(args.gkg_change_model).lower() == "tabpfn":
+        raise SystemExit(
+            "--gkg_change_model=tabpfn is reserved for future extension and is not implemented yet. "
+            "Use logit or xgb."
+        )
+    if bool(args.use_gkg_change_gate) and not bool(args.use_gkg_change_detector):
+        raise SystemExit(
+            "--use_gkg_change_gate requires --use_gkg_change_detector because it gates on p_change."
+        )
+    if bool(args.use_gkg_change_alpha) and not bool(args.use_gkg_change_detector):
+        raise SystemExit(
+            "--use_gkg_change_alpha requires --use_gkg_change_detector because it reweights alpha with p_change."
+        )
 
     if str(args.tabular_model) == "tabpfn" and not os.environ.get("TABPFN_MODEL_CACHE_DIR"):
         tabpfn_cache_dir = Path(args.outdir) / ".tabpfn_cache"
@@ -2133,6 +2868,12 @@ def main() -> int:
     final_compare_rows: list[dict[str, Any]] = []
 
     for asset_name, group_tickers in groups:
+        asset_gkg_change_alpha_weights = _resolve_asset_specific_grid(
+            default_grid=gkg_change_alpha_weights,
+            asset_overrides=gkg_change_alpha_weights_by_asset,
+            asset_name=str(asset_name),
+            tickers=tuple(group_tickers),
+        )
         folds = build_folds(
             min_train_end=args.min_train_end,
             max_valid_end=args.max_valid_end,
@@ -2180,6 +2921,20 @@ def main() -> int:
                             calibration_method=str(args.calibration_method),
                             class_threshold_grid=class_threshold_grid,
                             gate_thresholds=gate_thresholds,
+                            min_non_transition_delta=float(args.min_non_transition_delta),
+                            use_gkg_change_detector=bool(args.use_gkg_change_detector),
+                            use_gkg_change_gate=bool(args.use_gkg_change_gate),
+                            use_gkg_change_alpha=bool(args.use_gkg_change_alpha),
+                            gkg_change_model=str(args.gkg_change_model),
+                            gkg_change_context_cols=gkg_change_context_cols,
+                            gkg_change_calibration_method=str(
+                                args.gkg_change_calibration_method
+                            ),
+                            gkg_change_gate_thresholds=gkg_change_gate_thresholds,
+                            gkg_change_alpha_weights=asset_gkg_change_alpha_weights,
+                            gkg_change_blend_hook_weight=float(
+                                args.gkg_change_blend_hook_weight
+                            ),
                         )
                         combo_metrics[x_idx].append(res)
                         res_row = {
@@ -2193,6 +2948,9 @@ def main() -> int:
                                 "regime_prev_valid",
                                 "persist_valid_pred",
                                 "persist_valid_regime_pred",
+                                "gkg_change_p_change_eval",
+                                "gkg_change_y_eval",
+                                "gkg_change_pred_eval",
                             }
                         }
                         fold_rows.append(
@@ -2235,11 +2993,20 @@ def main() -> int:
                         if len(rows) < int(args.prune_after_folds):
                             continue
                         mean_delta = float(np.mean([r["delta_macro_f1_vs_persistence"] for r in rows]))
+                        mean_non_transition_delta = float(
+                            np.mean(
+                                [
+                                    r["delta_non_transition_macro_f1_vs_persistence"]
+                                    for r in rows
+                                ]
+                            )
+                        )
                         mean_high_vol_recall_delta = float(
                             np.mean([r["delta_high_vol_recall_vs_persistence"] for r in rows])
                         )
                         if (
                             mean_delta < float(args.prune_delta_threshold)
+                            or mean_non_transition_delta < float(args.min_non_transition_delta)
                             or mean_high_vol_recall_delta < float(args.min_high_vol_recall_delta)
                         ):
                             active_xgb.remove(x_idx)
@@ -2268,6 +3035,13 @@ def main() -> int:
                 oof_persist_regime = np.concatenate(
                     [np.asarray(r["persist_valid_regime_pred"], dtype=int) for r in rows]
                 ).astype(int)
+                oof_p_change = (
+                    np.concatenate(
+                        [np.asarray(r["gkg_change_p_change_eval"], dtype=float) for r in rows]
+                    ).astype(float)
+                    if bool(args.use_gkg_change_gate or args.use_gkg_change_alpha)
+                    else None
+                )
 
                 m_oof_persist_target = compute_metrics(oof_y_target, oof_persist_target)
                 oof_persist_target_metrics = {
@@ -2286,47 +3060,48 @@ def main() -> int:
                     "high_vol_recall": _high_vol_recall(m_oof_persist_regime),
                 }
 
-                if bool(args.use_blend):
-                    oof_selected_cfg, oof_best_m = _pick_best_blend_strategy(
-                        proba_chain=oof_proba,
-                        y_true_target=oof_y_target,
-                        y_persist_target=oof_persist_target,
-                        y_true_regime=oof_y_regime,
-                        blend_alphas=blend_alphas,
-                        blend_conf_betas=blend_conf_betas,
-                        class_threshold_grid=class_threshold_grid,
-                        gate_thresholds=gate_thresholds,
-                        persist_target_metrics=oof_persist_target_metrics,
-                        persist_regime_metrics=oof_persist_regime_metrics,
-                    )
-                    oof_selected_alpha = float(oof_selected_cfg["selected_alpha"])
-                    oof_selected_beta = float(oof_selected_cfg["selected_beta"])
-                    oof_selected_class_thresholds = _parse_class_thresholds(
-                        oof_selected_cfg["selected_class_thresholds"],
-                        n_classes=int(np.asarray(oof_proba).shape[1]),
-                    )
-                    oof_selected_gate_threshold = float(
-                        np.clip(oof_selected_cfg["selected_gate_threshold"], 0.0, 1.0)
-                    )
-                else:
-                    oof_selected_alpha = 1.0
-                    oof_selected_beta = 0.0
-                    oof_selected_class_thresholds = np.ones(
-                        int(np.asarray(oof_proba).shape[1]), dtype=float
-                    )
-                    oof_selected_gate_threshold = 0.0
-                    oof_best_m = _blend_metrics(
-                        proba_chain=oof_proba,
-                        y_true_target=oof_y_target,
-                        y_persist_target=oof_persist_target,
-                        y_true_regime=oof_y_regime,
-                        persist_target_metrics=oof_persist_target_metrics,
-                        persist_regime_metrics=oof_persist_regime_metrics,
-                        alpha=1.0,
-                        beta=0.0,
-                        class_thresholds=oof_selected_class_thresholds,
-                        gate_threshold=oof_selected_gate_threshold,
-                    )
+                oof_n_classes = int(np.asarray(oof_proba).shape[1])
+                oof_selected_cfg, oof_best_m = _pick_best_blend_strategy(
+                    proba_chain=oof_proba,
+                    y_true_target=oof_y_target,
+                    y_persist_target=oof_persist_target,
+                    y_true_regime=oof_y_regime,
+                    blend_alphas=blend_alphas if bool(args.use_blend) else (1.0,),
+                    blend_conf_betas=blend_conf_betas if bool(args.use_blend) else (0.0,),
+                    class_threshold_grid=(
+                        class_threshold_grid
+                        if bool(args.use_blend)
+                        else (tuple(np.ones(oof_n_classes, dtype=float).tolist()),)
+                    ),
+                    gate_thresholds=gate_thresholds if bool(args.use_blend) else (0.0,),
+                    persist_target_metrics=oof_persist_target_metrics,
+                    persist_regime_metrics=oof_persist_regime_metrics,
+                    p_change=oof_p_change,
+                    change_gate_thresholds=(
+                        gkg_change_gate_thresholds if bool(args.use_gkg_change_gate) else (0.0,)
+                    ),
+                    change_alpha_weights=(
+                        asset_gkg_change_alpha_weights
+                        if bool(args.use_gkg_change_alpha)
+                        else (0.0,)
+                    ),
+                    min_non_transition_delta=float(args.min_non_transition_delta),
+                )
+                oof_selected_alpha = float(oof_selected_cfg["selected_alpha"])
+                oof_selected_beta = float(oof_selected_cfg["selected_beta"])
+                oof_selected_class_thresholds = _parse_class_thresholds(
+                    oof_selected_cfg["selected_class_thresholds"],
+                    n_classes=oof_n_classes,
+                )
+                oof_selected_gate_threshold = float(
+                    np.clip(oof_selected_cfg["selected_gate_threshold"], 0.0, 1.0)
+                )
+                oof_selected_change_gate_threshold = float(
+                    np.clip(oof_selected_cfg.get("selected_change_gate_threshold", 0.0), 0.0, 1.0)
+                )
+                oof_selected_change_alpha_weight = float(
+                    np.clip(oof_selected_cfg.get("selected_change_alpha_weight", 0.0), 0.0, 1.0)
+                )
 
                 fold_eval_metrics = []
                 for r in rows:
@@ -2355,6 +3130,13 @@ def main() -> int:
                         beta=float(oof_selected_beta),
                         class_thresholds=oof_selected_class_thresholds,
                         gate_threshold=oof_selected_gate_threshold,
+                        p_change=(
+                            np.asarray(r["gkg_change_p_change_eval"], dtype=float)
+                            if bool(args.use_gkg_change_gate or args.use_gkg_change_alpha)
+                            else None
+                        ),
+                        change_gate_threshold=float(oof_selected_change_gate_threshold),
+                        change_alpha_weight=float(oof_selected_change_alpha_weight),
                     )
                     fold_eval_metrics.append(fm)
 
@@ -2381,22 +3163,75 @@ def main() -> int:
                     [m["delta_transition_macro_f1_vs_persistence"] for m in fold_eval_metrics],
                     dtype=float,
                 )
+                delta_non_transition_macro_f1_series = np.array(
+                    [m["delta_non_transition_macro_f1_vs_persistence"] for m in fold_eval_metrics],
+                    dtype=float,
+                )
                 gating_rate_series = np.array([m["gating_rate"] for m in fold_eval_metrics], dtype=float)
+                confidence_gating_rate_series = np.array(
+                    [m["confidence_gating_rate"] for m in fold_eval_metrics], dtype=float
+                )
+                change_gating_rate_series = np.array(
+                    [m["change_gating_rate"] for m in fold_eval_metrics], dtype=float
+                )
+                mean_p_change_series = np.array(
+                    [m["mean_p_change"] for m in fold_eval_metrics], dtype=float
+                )
                 confidence_series = np.array([m["mean_confidence"] for m in fold_eval_metrics], dtype=float)
+                change_alpha_multiplier_series = np.array(
+                    [m["mean_change_alpha_multiplier"] for m in fold_eval_metrics], dtype=float
+                )
+                gkg_change_enabled_series = np.array(
+                    [float(bool(r.get("gkg_change_enabled", False))) for r in rows], dtype=float
+                )
+                gkg_change_macro_f1_series = np.array(
+                    [float(r.get("gkg_change_eval_macro_f1", np.nan)) for r in rows], dtype=float
+                )
+                gkg_change_auc_series = np.array(
+                    [float(r.get("gkg_change_eval_auc", np.nan)) for r in rows], dtype=float
+                )
+                gkg_change_brier_series = np.array(
+                    [float(r.get("gkg_change_eval_brier", np.nan)) for r in rows], dtype=float
+                )
+                gkg_change_pchange_mean_series = np.array(
+                    [float(r.get("gkg_change_eval_p_change_mean", np.nan)) for r in rows],
+                    dtype=float,
+                )
 
                 positive_rate = float(np.mean(delta_series > 0.0))
                 stability_penalty = float(args.stability_lambda) * float(np.std(delta_series))
                 positive_gap = max(0.0, float(args.min_positive_rate) - positive_rate)
                 positive_penalty = float(args.positive_rate_lambda) * positive_gap
+                mean_non_transition_delta = float(
+                    np.nan_to_num(_safe_mean(delta_non_transition_macro_f1_series), nan=-1.0)
+                )
+                non_transition_gap = max(
+                    0.0, float(args.min_non_transition_delta) - mean_non_transition_delta
+                )
+                non_transition_penalty = (
+                    float(args.non_transition_penalty_lambda) * non_transition_gap
+                )
                 transition_bonus = float(args.transition_bonus_lambda) * float(
                     np.nan_to_num(_safe_mean(delta_transition_macro_f1_series), nan=0.0)
                 )
                 robust_score = (
-                    float(np.mean(delta_series)) - stability_penalty - positive_penalty + transition_bonus
+                    float(np.mean(delta_series))
+                    - stability_penalty
+                    - positive_penalty
+                    - non_transition_penalty
+                    + transition_bonus
                 )
 
                 gate_series_fold = np.array(
                     [float(r.get("selected_gate_threshold", 0.0)) for r in rows], dtype=float
+                )
+                change_gate_series_fold = np.array(
+                    [float(r.get("selected_change_gate_threshold", 0.0)) for r in rows],
+                    dtype=float,
+                )
+                change_alpha_weight_series_fold = np.array(
+                    [float(r.get("selected_change_alpha_weight", 0.0)) for r in rows],
+                    dtype=float,
                 )
                 class_threshold_tokens = [
                     str(r.get("selected_class_thresholds", _format_class_thresholds([1.0, 1.0, 1.0])))
@@ -2420,20 +3255,77 @@ def main() -> int:
                         "mean_selected_alpha": float(np.mean(alpha_series_fold)),
                         "mean_selected_beta": float(np.mean(beta_series_fold)),
                         "mean_selected_gate_threshold": float(np.mean(gate_series_fold)),
+                        "mean_selected_change_gate_threshold": float(
+                            np.mean(change_gate_series_fold)
+                        ),
+                        "mean_selected_change_alpha_weight": float(
+                            np.mean(change_alpha_weight_series_fold)
+                        ),
                         "mean_selected_class_thresholds": class_threshold_mode,
                         "selected_calibration_method": calibration_method_mode,
                         "mean_effective_alpha_fold": float(np.mean(eff_alpha_series_fold)),
+                        "mean_change_alpha_multiplier_fold": _safe_mean(
+                            change_alpha_multiplier_series
+                        ),
                         "mean_confidence_fold": _safe_mean(confidence_series),
                         "mean_gating_rate_fold": _safe_mean(gating_rate_series),
+                        "mean_confidence_gating_rate_fold": _safe_mean(
+                            confidence_gating_rate_series
+                        ),
+                        "mean_change_gating_rate_fold": _safe_mean(change_gating_rate_series),
+                        "mean_p_change_fold": _safe_mean(mean_p_change_series),
+                        "gkg_change_enabled_rate_fold": _safe_mean(gkg_change_enabled_series),
+                        "use_gkg_change_gate": bool(args.use_gkg_change_gate),
+                        "use_gkg_change_alpha": bool(args.use_gkg_change_alpha),
+                        "gkg_change_alpha_weights_grid": ",".join(
+                            str(v) for v in asset_gkg_change_alpha_weights
+                        ),
+                        "gkg_change_model": str(
+                            Counter([str(r.get("gkg_change_model", "")) for r in rows]).most_common(1)[0][0]
+                        ),
+                        "gkg_change_context_cols": str(
+                            Counter([str(r.get("gkg_change_context_cols", "")) for r in rows]).most_common(1)[0][0]
+                        ),
+                        "gkg_change_calibration_method": str(
+                            Counter(
+                                [str(r.get("gkg_change_calibration_method", "")) for r in rows]
+                            ).most_common(1)[0][0]
+                        ),
+                        "mean_gkg_change_n_features": _safe_mean(
+                            [float(r.get("gkg_change_n_features", np.nan)) for r in rows]
+                        ),
+                        "mean_gkg_change_eval_macro_f1": _safe_mean(gkg_change_macro_f1_series),
+                        "mean_gkg_change_eval_auc": _safe_mean(gkg_change_auc_series),
+                        "mean_gkg_change_eval_brier": _safe_mean(gkg_change_brier_series),
+                        "mean_gkg_change_eval_p_change_mean": _safe_mean(
+                            gkg_change_pchange_mean_series
+                        ),
+                        "gkg_change_blend_hook_weight": float(
+                            args.gkg_change_blend_hook_weight
+                        ),
                         "oof_selected_alpha": float(oof_selected_alpha),
                         "oof_selected_beta": float(oof_selected_beta),
                         "oof_selected_gate_threshold": float(oof_selected_gate_threshold),
+                        "oof_selected_change_gate_threshold": float(
+                            oof_selected_change_gate_threshold
+                        ),
+                        "oof_selected_change_alpha_weight": float(
+                            oof_selected_change_alpha_weight
+                        ),
                         "oof_selected_class_thresholds": _format_class_thresholds(
                             oof_selected_class_thresholds
                         ),
                         "oof_mean_effective_alpha": float(oof_best_m["mean_effective_alpha"]),
+                        "oof_mean_change_alpha_multiplier": float(
+                            oof_best_m["mean_change_alpha_multiplier"]
+                        ),
                         "oof_mean_confidence": float(oof_best_m["mean_confidence"]),
                         "oof_gating_rate": float(oof_best_m["gating_rate"]),
+                        "oof_confidence_gating_rate": float(
+                            oof_best_m["confidence_gating_rate"]
+                        ),
+                        "oof_change_gating_rate": float(oof_best_m["change_gating_rate"]),
+                        "oof_mean_p_change": float(oof_best_m["mean_p_change"]),
                         "oof_valid_acc": float(oof_best_m["acc"]),
                         "oof_valid_macro_f1": float(oof_best_m["macro_f1"]),
                         "oof_valid_weighted_f1": float(oof_best_m["weighted_f1"]),
@@ -2472,8 +3364,12 @@ def main() -> int:
                         "mean_delta_transition_macro_f1_vs_persistence": _safe_mean(
                             delta_transition_macro_f1_series
                         ),
+                        "mean_delta_non_transition_macro_f1_vs_persistence": _safe_mean(
+                            delta_non_transition_macro_f1_series
+                        ),
                         "std_delta_macro_vs_persistence": float(np.std(delta_series)),
                         "positive_delta_rate": positive_rate,
+                        "non_transition_penalty": float(non_transition_penalty),
                         "transition_bonus": float(transition_bonus),
                         "robust_score": robust_score,
                         "pruned": bool(pruned_at[x_idx] is not None),
@@ -2483,6 +3379,9 @@ def main() -> int:
 
         summary_df = pd.DataFrame(summary_rows)
         if summary_df.empty:
+            failed_rows = [r for r in fold_rows if "error" in r]
+            if failed_rows:
+                pd.DataFrame(failed_rows).to_csv(outdir / "failed_experiments.csv", index=False)
             raise SystemExit(f"No successful experiments in walk-forward for asset={asset_name}.")
 
         summary_df = summary_df[summary_df["n_folds_ok"] >= int(args.min_folds_ok)].copy()
@@ -2499,14 +3398,22 @@ def main() -> int:
                 f"Try lowering --min_high_vol_recall_delta."
             )
 
+        summary_df_non_transition = summary_df[
+            summary_df["mean_delta_non_transition_macro_f1_vs_persistence"]
+            >= float(args.min_non_transition_delta)
+        ].copy()
+        if not summary_df_non_transition.empty:
+            summary_df = summary_df_non_transition
+
         summary_df = summary_df.sort_values(
             [
                 "robust_score",
+                "mean_delta_non_transition_macro_f1_vs_persistence",
                 "mean_delta_high_vol_recall_vs_persistence",
                 "mean_delta_macro_vs_persistence",
                 "mean_valid_macro_f1",
             ],
-            ascending=[False, False, False, False],
+            ascending=[False, False, False, False, False],
         )
         best = summary_df.iloc[0].to_dict()
         global_best_rows.append(best)
@@ -2589,6 +3496,25 @@ def main() -> int:
                 )
             ),
             calibration_method=str(best.get("selected_calibration_method", args.calibration_method)),
+            use_gkg_change_detector=bool(args.use_gkg_change_detector),
+            use_gkg_change_gate=bool(args.use_gkg_change_gate),
+            use_gkg_change_alpha=bool(args.use_gkg_change_alpha),
+            gkg_change_model=str(args.gkg_change_model),
+            gkg_change_context_cols=gkg_change_context_cols,
+            gkg_change_calibration_method=str(args.gkg_change_calibration_method),
+            gkg_change_gate_threshold=float(
+                best.get(
+                    "oof_selected_change_gate_threshold",
+                    best.get("mean_selected_change_gate_threshold", 0.0),
+                )
+            ),
+            gkg_change_alpha_weight=float(
+                best.get(
+                    "oof_selected_change_alpha_weight",
+                    best.get("mean_selected_change_alpha_weight", 0.0),
+                )
+            ),
+            gkg_change_blend_hook_weight=float(args.gkg_change_blend_hook_weight),
         )
         final_compare_rows.append(
             {
