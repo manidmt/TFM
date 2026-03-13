@@ -159,8 +159,12 @@ def _load_news_block(
 
     out = pd.DataFrame({"date": master_idx})
 
-    configured_ids = [str(q).strip() for q in cfg.news_query_ids if str(q).strip()]
-    use_suffix = len(configured_ids) > 0
+    configured_ids_raw = [str(q).strip() for q in cfg.news_query_ids if str(q).strip()]
+    configured_ids: list[str] = []
+    for query_id in configured_ids_raw:
+        sanitized = _sanitize_query_id(query_id)
+        if sanitized and sanitized not in configured_ids:
+            configured_ids.append(sanitized)
     if dfn.empty:
         query_ids = configured_ids or ["default"]
         dfn = pd.DataFrame({"query_id": query_ids})
@@ -178,6 +182,7 @@ def _load_news_block(
             .sort_values(["query_id", "date"])
         )
         query_ids = configured_ids or sorted(dfn["query_id"].unique().tolist())
+    use_suffix = len(query_ids) > 1 or len(configured_ids) > 0
 
     windows = tuple(sorted({int(w) for w in cfg.news_windows if int(w) > 0}))
     shock_windows = tuple(sorted({int(w) for w in cfg.news_shock_windows if int(w) > 0}))

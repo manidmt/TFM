@@ -37,10 +37,14 @@ def main() -> int:
     gdelt_cfg = src_cfg.get("gdelt", {})
     gkg_topics_cfg = gkg_cfg.get("topics", {})
     gdelt_queries_cfg = gdelt_cfg.get("queries", {})
-    if isinstance(gkg_topics_cfg, dict) and gkg_topics_cfg:
+    gkg_enabled = bool(gkg_cfg.get("enabled", False))
+    gdelt_enabled = bool(gdelt_cfg.get("enabled", False))
+    if gkg_enabled and isinstance(gkg_topics_cfg, dict) and gkg_topics_cfg:
         query_map = gkg_topics_cfg
-    else:
+    elif gdelt_enabled and isinstance(gdelt_queries_cfg, dict) and gdelt_queries_cfg:
         query_map = gdelt_queries_cfg
+    else:
+        query_map = {}
     news_query_ids = (
         tuple(str(k).strip().lower() for k in query_map.keys() if str(k).strip())
         if isinstance(query_map, dict)
