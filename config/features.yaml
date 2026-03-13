@@ -35,13 +35,29 @@ features:
     cross_corr_window: 20
 
 news_features:
-  enabled: false
+  # Official stable feature-engineering profile paired with gkg.profile_name=gkg_v1_light.
+  profile_name: "gkg_v1_features_compact"
+  profile_version: "2026-03-13"
+  enabled: true
+  source_table: "news_features_daily"
+  topics_enabled: []
   windows: [3, 10, 20]
-  include_roll_sum: true
-  include_roll_mean: true
-  include_roll_std: true
+  attn_z_window: 252
+  attn_shock_threshold: 2.0
+  shock_windows: [3, 10, 20]
+  compact_mode: true
+  topic_share_enabled: true
+  include_roll_sum: false
+  include_roll_mean: false
+  include_roll_std: false
   include_tone_std: false
   include_tone_neg_share: false
+  include_interactions: true
+  health:
+    min_nonzero_rate: 0.01
+    min_unique_values: 3
+    drop_dead_queries: true
+    fail_if_all_dead: true
 
 split:
   train_end: "2020-12-31"
