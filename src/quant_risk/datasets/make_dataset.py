@@ -106,8 +106,13 @@ def _infer_feature_columns(df: pd.DataFrame) -> list[str]:
 
     keep = []
     for c in num_cols:
-        if df[c].notna().mean() >= 0.98:
-            keep.append(c)
+        if df[c].notna().mean() < 0.98:
+            continue
+        std = pd.to_numeric(df[c], errors="coerce").std(skipna=True)
+        # Guard against dead/constant features (e.g., broken query blocks).
+        if not np.isfinite(std) or float(std) <= 1e-12:
+            continue
+        keep.append(c)
 
     return keep
 
@@ -302,6 +307,43 @@ def _regime_boundary_distance(
 
     distances[valid_rows] = row_min.astype(float)
     return pd.Series(distances, index=df_split.index, dtype=float)
+
+
+def _add_news_vol_interactions(
+    df_in: pd.DataFrame,
+    *,
+    vol_prefix: str | None,
+) -> tuple[pd.DataFrame, list[str]]:
+    out_df = df_in.copy()
+    attn_cols = [c for c in out_df.columns if c == "attn_z" or c.startswith("attn_z_")]
+    topic_cols = [
+        c for c in out_df.columns if c == "topic_share_z" or c.startswith("topic_share_z_")
+    ]
+    signal_cols = attn_cols + topic_cols
+    if not signal_cols:
+        return out_df, []
+
+    sigma_candidates = ["sigma_t"]
+    if vol_prefix:
+        sigma_candidates.append(f"{vol_prefix}_sigma_t")
+    sigma_col = next((c for c in sigma_candidates if c in out_df.columns), None)
+    if sigma_col is None:
+        return out_df, []
+
+    added_cols: list[str] = []
+    for attn_col in attn_cols:
+        suffix = "" if attn_col == "attn_z" else attn_col[len("attn_z") :]
+        out_col = f"attn_z_x_sigma_t{suffix}"
+        out_df[out_col] = out_df[attn_col] * out_df[sigma_col]
+        added_cols.append(out_col)
+
+    for topic_col in topic_cols:
+        suffix = "" if topic_col == "topic_share_z" else topic_col[len("topic_share_z") :]
+        out_col = f"topic_share_z_x_sigma_t{suffix}"
+        out_df[out_col] = out_df[topic_col] * out_df[sigma_col]
+        added_cols.append(out_col)
+
+    return out_df, added_cols
 
 
 def make_dataset(cfg: DatasetConfig) -> dict:
@@ -625,6 +667,14 @@ def make_dataset(cfg: DatasetConfig) -> dict:
         for c in _chain_sigma_alias_columns(cfg.horizon):
             if c in combined.columns and c not in feature_cols:
                 feature_cols.append(c)
+
+    combined, news_sigma_cols = _add_news_vol_interactions(
+        combined,
+        vol_prefix=active_vol_prefix,
+    )
+    for c in news_sigma_cols:
+        if c not in feature_cols:
+            feature_cols.append(c)
 
     df_model = combined.copy()
     

@@ -15,7 +15,10 @@ from datetime import date, datetime, timedelta, timezone
 from io import StringIO
 from typing import Optional
 from urllib.parse import urlencode
+from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
+import time
+import random
 
 import duckdb
 import numpy as np
@@ -36,8 +39,27 @@ class GdeltIngestConfig:
     keep_artlist_sample: bool = False
     query: str = "(finance OR market OR stocks OR bitcoin OR treasury)"
     queries: dict[str, str] | None = None
+    query_candidates: dict[str, list[str]] | None = None
+    query_dead_min_nonzero_rate: float = 0.01
+    query_dead_min_avg_news_count: float = 1.0
     max_records_per_day: int = 250
     timeout_seconds: int = 30
+    timeline_chunk_days: int = 30
+    max_retries: int = 6
+    retry_backoff_seconds: float = 2.0
+    retry_max_sleep_seconds: float = 120.0
+    request_pause_seconds: float = 0.25
+    verbose: bool = True
+
+
+def _log(cfg: GdeltIngestConfig, message: str) -> None:
+    """
+    Emit a timestamped progress log line if verbose mode is enabled.
+    """
+    if not bool(getattr(cfg, "verbose", False)):
+        return
+    ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    print(f"[gdelt] {ts} {message}", flush=True)
 
 
 def connect(db_path: str) -> duckdb.DuckDBPyConnection:
@@ -141,6 +163,21 @@ def _iter_days(start_day: date, end_day: date) -> list[date]:
     return [start_day + timedelta(days=i) for i in range(n_days + 1)]
 
 
+def _iter_date_chunks(start_day: date, end_day: date, chunk_days: int) -> list[tuple[date, date]]:
+    """
+    Build inclusive date chunks of size chunk_days.
+    """
+    if chunk_days <= 0:
+        return [(start_day, end_day)]
+    chunks: list[tuple[date, date]] = []
+    cur = start_day
+    while cur <= end_day:
+        nxt = min(cur + timedelta(days=chunk_days - 1), end_day)
+        chunks.append((cur, nxt))
+        cur = nxt + timedelta(days=1)
+    return chunks
+
+
 def _load_csv_from_url(url: str, timeout_seconds: int) -> pd.DataFrame:
     """
     Download a CSV payload from URL and parse it as a pandas DataFrame.
@@ -149,7 +186,11 @@ def _load_csv_from_url(url: str, timeout_seconds: int) -> pd.DataFrame:
         payload = resp.read().decode("utf-8", errors="ignore")
     if not payload.strip():
         return pd.DataFrame()
-    return pd.read_csv(StringIO(payload))
+    try:
+        return pd.read_csv(StringIO(payload))
+    except (pd.errors.EmptyDataError, pd.errors.ParserError):
+        # GDELT can return an empty/degenerate payload for windows with no matches.
+        return pd.DataFrame()
 
 
 def _fetch_doc_mode_csv(
@@ -158,6 +199,7 @@ def _fetch_doc_mode_csv(
     start_day: date,
     end_day: date,
     query: str,
+    request_label: str | None = None,
 ) -> pd.DataFrame:
     """
     Fetch a CSV response from GDELT Doc API for a date range and mode.
@@ -173,7 +215,67 @@ def _fetch_doc_mode_csv(
         params["maxrecords"] = int(cfg.max_records_per_day)
 
     url = f"{GDELT_DOC_API}?{urlencode(params)}"
-    return _load_csv_from_url(url, timeout_seconds=int(cfg.timeout_seconds))
+    max_retries = max(0, int(cfg.max_retries))
+    base_sleep = max(0.0, float(cfg.retry_backoff_seconds))
+    max_sleep = max(base_sleep, float(cfg.retry_max_sleep_seconds))
+
+    for attempt in range(max_retries + 1):
+        try:
+            if attempt == 0:
+                _log(
+                    cfg,
+                    f"request start mode={mode} range={start_day}..{end_day} label={request_label or '-'}",
+                )
+            out = _load_csv_from_url(url, timeout_seconds=int(cfg.timeout_seconds))
+            _log(
+                cfg,
+                f"request ok mode={mode} range={start_day}..{end_day} label={request_label or '-'} rows={len(out)} attempt={attempt+1}",
+            )
+            pause = float(cfg.request_pause_seconds)
+            if pause > 0.0:
+                time.sleep(pause)
+            return out
+        except HTTPError as exc:
+            code = int(getattr(exc, "code", 0) or 0)
+            retryable = code == 429 or 500 <= code < 600
+            if not retryable or attempt >= max_retries:
+                raise
+
+            retry_after = 0.0
+            try:
+                hdr = getattr(exc, "headers", None)
+                if hdr is not None:
+                    ra = hdr.get("Retry-After")
+                    if ra is not None:
+                        retry_after = float(ra)
+            except Exception:
+                retry_after = 0.0
+
+            exp_sleep = base_sleep * (2**attempt)
+            jitter = random.uniform(0.0, max(base_sleep * 0.25, 0.01))
+            sleep_for = min(max_sleep, max(retry_after, exp_sleep + jitter))
+            _log(
+                cfg,
+                f"request retry mode={mode} range={start_day}..{end_day} label={request_label or '-'} "
+                f"http={code} attempt={attempt+1}/{max_retries+1} sleep={sleep_for:.2f}s",
+            )
+            if sleep_for > 0.0:
+                time.sleep(sleep_for)
+        except URLError:
+            if attempt >= max_retries:
+                raise
+            exp_sleep = base_sleep * (2**attempt)
+            jitter = random.uniform(0.0, max(base_sleep * 0.25, 0.01))
+            sleep_for = min(max_sleep, exp_sleep + jitter)
+            _log(
+                cfg,
+                f"request retry mode={mode} range={start_day}..{end_day} label={request_label or '-'} "
+                f"network_error attempt={attempt+1}/{max_retries+1} sleep={sleep_for:.2f}s",
+            )
+            if sleep_for > 0.0:
+                time.sleep(sleep_for)
+
+    return pd.DataFrame()
 
 
 def _normalize_articles(df: pd.DataFrame) -> pd.DataFrame:
@@ -223,6 +325,7 @@ def fetch_day_articles(cfg: GdeltIngestConfig, day: date, query: str | None = No
         start_day=day,
         end_day=day,
         query=str(query or cfg.query),
+        request_label="artlist-day",
     )
     return _normalize_articles(raw)
 
@@ -319,6 +422,7 @@ def fetch_timeline_volraw(
         start_day=start_day,
         end_day=end_day,
         query=str(query or cfg.query),
+        request_label="timeline-volraw",
     )
     norm = _normalize_timeline_metric(
         raw,
@@ -346,6 +450,7 @@ def fetch_timeline_tone(
         start_day=start_day,
         end_day=end_day,
         query=str(query or cfg.query),
+        request_label="timeline-tone",
     )
     norm = _normalize_timeline_metric(
         raw,
@@ -395,31 +500,8 @@ def fetch_timeline_range(cfg: GdeltIngestConfig, start_day: date, end_day: date)
     """
     Fetch timeline volume/tone metrics for a range and return a daily merged dataframe.
     """
-    vol = fetch_timeline_volraw(cfg, start_day, end_day)
-    tone = fetch_timeline_tone(cfg, start_day, end_day)
-    out = vol.merge(tone, on="date", how="outer").sort_values("date").reset_index(drop=True)
-    if out.empty:
-        out = pd.DataFrame(columns=["date", "news_count", "tone_mean"])
-
-    out["tone_std"] = np.nan
-    out["tone_neg_share"] = np.nan
-
-    if bool(cfg.keep_artlist_sample):
-        art_sample, _ = fetch_artlist_range(cfg, start_day, end_day)
-        if not art_sample.empty:
-            sample_cols = ["date", "tone_std", "tone_neg_share"]
-            art_keep = art_sample[sample_cols].drop_duplicates(subset=["date"])
-            out = out.merge(art_keep, on="date", how="left", suffixes=("", "_sample"))
-            out["tone_std"] = out["tone_std"].where(out["tone_std"].notna(), out["tone_std_sample"])
-            out["tone_neg_share"] = out["tone_neg_share"].where(
-                out["tone_neg_share"].notna(), out["tone_neg_share_sample"]
-            )
-            drop_cols = [c for c in ["tone_std_sample", "tone_neg_share_sample"] if c in out.columns]
-            if drop_cols:
-                out = out.drop(columns=drop_cols)
-
-    cols = ["date", "news_count", "tone_mean", "tone_std", "tone_neg_share"]
-    return out[cols].sort_values("date").reset_index(drop=True)
+    out, _ = fetch_timeline_range_for_query(cfg, start_day, end_day, query_text=str(cfg.query))
+    return out
 
 
 def _queries_from_cfg(cfg: GdeltIngestConfig) -> dict[str, str]:
@@ -437,6 +519,62 @@ def _queries_from_cfg(cfg: GdeltIngestConfig) -> dict[str, str]:
         if out:
             return out
     return {"default": str(cfg.query)}
+
+
+def _query_candidates_for_id(cfg: GdeltIngestConfig, query_id: str, primary_query: str) -> list[str]:
+    """
+    Build ordered candidates for one query_id, primary first and deduplicated.
+    """
+    out: list[str] = [str(primary_query).strip()]
+    candidates_cfg = cfg.query_candidates or {}
+    extra = candidates_cfg.get(str(query_id), [])
+    if isinstance(extra, str):
+        extra = [extra]
+    for q in extra:
+        qtxt = str(q).strip()
+        if qtxt and qtxt not in out:
+            out.append(qtxt)
+    return out
+
+
+def _daily_signal_stats(df: pd.DataFrame) -> dict[str, float]:
+    """
+    Compute simple quality stats for a fetched daily signal frame.
+    """
+    if df is None or df.empty or "news_count" not in df.columns:
+        return {
+            "rows": 0.0,
+            "positive_days": 0.0,
+            "nonzero_rate": 0.0,
+            "avg_news_count": 0.0,
+        }
+    news = pd.to_numeric(df["news_count"], errors="coerce").fillna(0.0)
+    rows = float(len(news))
+    positive_days = float((news > 0.0).sum())
+    nonzero_rate = float(positive_days / rows) if rows > 0 else 0.0
+    avg_news_count = float(news.mean()) if rows > 0 else 0.0
+    return {
+        "rows": rows,
+        "positive_days": positive_days,
+        "nonzero_rate": nonzero_rate,
+        "avg_news_count": avg_news_count,
+    }
+
+
+def _is_dead_signal(stats: dict[str, float], cfg: GdeltIngestConfig) -> bool:
+    """
+    Flag a daily signal as dead (all-zero or near-all-zero).
+    """
+    rows = float(stats.get("rows", 0.0))
+    positive_days = float(stats.get("positive_days", 0.0))
+    nonzero_rate = float(stats.get("nonzero_rate", 0.0))
+    avg_news_count = float(stats.get("avg_news_count", 0.0))
+    if rows <= 0 or positive_days <= 0:
+        return True
+    return (
+        nonzero_rate < float(cfg.query_dead_min_nonzero_rate)
+        and avg_news_count < float(cfg.query_dead_min_avg_news_count)
+    )
 
 
 def fetch_artlist_range_for_query(
@@ -482,21 +620,57 @@ def fetch_timeline_range_for_query(
     start_day: date,
     end_day: date,
     query_text: str,
-) -> pd.DataFrame:
+) -> tuple[pd.DataFrame, dict[str, str]]:
     """
     Fetch timeline aggregates for a single query over a date range.
     """
-    vol = fetch_timeline_volraw(cfg, start_day, end_day, query=query_text)
-    tone = fetch_timeline_tone(cfg, start_day, end_day, query=query_text)
-    out = vol.merge(tone, on="date", how="outer").sort_values("date").reset_index(drop=True)
-    if out.empty:
+    errors: dict[str, str] = {}
+    chunks = _iter_date_chunks(start_day, end_day, int(cfg.timeline_chunk_days))
+    chunk_rows: list[pd.DataFrame] = []
+    _log(
+        cfg,
+        f"query start mode=timeline chunks={len(chunks)} range={start_day}..{end_day} "
+        f"query='{query_text[:80]}'",
+    )
+
+    for idx, (c_start, c_end) in enumerate(chunks, start=1):
+        chunk_key = f"{c_start.isoformat()}..{c_end.isoformat()}"
+        try:
+            _log(cfg, f"chunk start {idx}/{len(chunks)} {chunk_key}")
+            vol = fetch_timeline_volraw(cfg, c_start, c_end, query=query_text)
+            tone = fetch_timeline_tone(cfg, c_start, c_end, query=query_text)
+            chunk = vol.merge(tone, on="date", how="outer").sort_values("date").reset_index(drop=True)
+            if not chunk.empty:
+                chunk_rows.append(chunk)
+            _log(
+                cfg,
+                f"chunk ok {idx}/{len(chunks)} {chunk_key} rows_vol={len(vol)} rows_tone={len(tone)} rows_merged={len(chunk)}",
+            )
+        except Exception as exc:
+            errors[chunk_key] = str(exc)
+            _log(cfg, f"chunk error {idx}/{len(chunks)} {chunk_key}: {exc}")
+
+    if chunk_rows:
+        out = pd.concat(chunk_rows, ignore_index=True)
+        out = (
+            out.groupby("date", as_index=False)
+            .agg(
+                news_count=("news_count", "sum"),
+                tone_mean=("tone_mean", "mean"),
+            )
+            .sort_values("date")
+            .reset_index(drop=True)
+        )
+    else:
         out = pd.DataFrame(columns=["date", "news_count", "tone_mean"])
 
     out["tone_std"] = np.nan
     out["tone_neg_share"] = np.nan
 
     if bool(cfg.keep_artlist_sample):
-        art_sample, _ = fetch_artlist_range_for_query(cfg, start_day, end_day, query_text=query_text)
+        art_sample, art_errors = fetch_artlist_range_for_query(cfg, start_day, end_day, query_text=query_text)
+        for k, msg in art_errors.items():
+            errors[f"artlist:{k}"] = msg
         if not art_sample.empty:
             sample_cols = ["date", "tone_std", "tone_neg_share"]
             art_keep = art_sample[sample_cols].drop_duplicates(subset=["date"])
@@ -510,7 +684,12 @@ def fetch_timeline_range_for_query(
                 out = out.drop(columns=drop_cols)
 
     cols = ["date", "news_count", "tone_mean", "tone_std", "tone_neg_share"]
-    return out[cols].sort_values("date").reset_index(drop=True)
+    out = out[cols].sort_values("date").reset_index(drop=True)
+    _log(
+        cfg,
+        f"query done mode=timeline range={start_day}..{end_day} rows={len(out)} errors={len(errors)}",
+    )
+    return out, errors
 
 
 def upsert_gdelt_daily(
@@ -552,7 +731,12 @@ def upsert_gdelt_daily(
     return len(df2)
 
 
-def refresh_gdelt(cfg: GdeltIngestConfig, end: Optional[str] = None) -> dict:
+def refresh_gdelt(
+    cfg: GdeltIngestConfig,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    query_ids: Optional[list[str]] = None,
+) -> dict:
     """
     Run incremental ingestion from GDELT API and persist daily aggregates.
     """
@@ -560,36 +744,99 @@ def refresh_gdelt(cfg: GdeltIngestConfig, end: Optional[str] = None) -> dict:
     try:
         init_schema(con, cfg.table)
 
-        last = get_last_date(con, cfg.table)
-        if last is not None:
-            start_day = last - timedelta(days=int(cfg.lookback_buffer_days))
+        if start:
+            start_day = pd.to_datetime(start).date()
         else:
-            start_day = pd.to_datetime(cfg.start).date()
+            last = get_last_date(con, cfg.table)
+            if last is not None:
+                start_day = last - timedelta(days=int(cfg.lookback_buffer_days))
+            else:
+                start_day = pd.to_datetime(cfg.start).date()
 
         end_day = pd.to_datetime(end).date() if end else date.today()
         mode = str(cfg.mode).strip().lower()
         errors: dict[str, str] = {}
         queries = _queries_from_cfg(cfg)
+        if query_ids:
+            keep = {str(q).strip() for q in query_ids if str(q).strip()}
+            queries = {k: v for k, v in queries.items() if k in keep}
+            if not queries:
+                raise ValueError(f"query_ids={query_ids!r} does not match configured ids.")
         merged_rows: list[pd.DataFrame] = []
+        selected_query_text: dict[str, str] = {}
+        _log(
+            cfg,
+            f"refresh start mode={mode} start={start_day} end={end_day} query_count={len(queries)}",
+        )
 
         for query_id, query_text in queries.items():
-            if mode == "timeline":
-                try:
-                    q_df = fetch_timeline_range_for_query(cfg, start_day, end_day, query_text=query_text)
-                except Exception as exc:
-                    errors[f"{query_id}:timeline"] = str(exc)
-                    q_df = pd.DataFrame(columns=["date", "news_count", "tone_mean", "tone_std", "tone_neg_share"])
-            elif mode == "artlist":
-                q_df, q_errors = fetch_artlist_range_for_query(cfg, start_day, end_day, query_text=query_text)
-                for day_key, msg in q_errors.items():
-                    errors[f"{query_id}:{day_key}"] = msg
-            else:
-                raise ValueError(f"Unsupported gdelt.mode={cfg.mode!r}. Use 'timeline' or 'artlist'.")
+            _log(cfg, f"query_id start id={query_id}")
+            candidates = _query_candidates_for_id(cfg, query_id=str(query_id), primary_query=str(query_text))
+            selected_df = pd.DataFrame()
+            selected_stats = {"rows": 0.0, "positive_days": 0.0, "nonzero_rate": 0.0, "avg_news_count": 0.0}
+            selected_query = candidates[0]
 
-            if not q_df.empty:
-                q_df = q_df.copy()
+            for cand_idx, cand_query in enumerate(candidates, start=1):
+                if mode == "timeline":
+                    q_df, q_errors = fetch_timeline_range_for_query(
+                        cfg,
+                        start_day,
+                        end_day,
+                        query_text=cand_query,
+                    )
+                    for chunk_key, msg in q_errors.items():
+                        errors[f"{query_id}:cand{cand_idx}:timeline:{chunk_key}"] = msg
+                elif mode == "artlist":
+                    q_df, q_errors = fetch_artlist_range_for_query(
+                        cfg,
+                        start_day,
+                        end_day,
+                        query_text=cand_query,
+                    )
+                    for day_key, msg in q_errors.items():
+                        errors[f"{query_id}:cand{cand_idx}:{day_key}"] = msg
+                else:
+                    raise ValueError(f"Unsupported gdelt.mode={cfg.mode!r}. Use 'timeline' or 'artlist'.")
+
+                stats = _daily_signal_stats(q_df)
+                is_dead = _is_dead_signal(stats, cfg)
+                _log(
+                    cfg,
+                    f"query_id={query_id} candidate={cand_idx}/{len(candidates)} "
+                    f"rows={int(stats['rows'])} positive_days={int(stats['positive_days'])} "
+                    f"nonzero_rate={stats['nonzero_rate']:.4f} avg_news_count={stats['avg_news_count']:.2f} dead={is_dead}",
+                )
+
+                # Prefer first viable candidate; otherwise keep best by positive_days/nonzero_rate/avg.
+                better = (
+                    (stats["positive_days"], stats["nonzero_rate"], stats["avg_news_count"])
+                    > (
+                        selected_stats["positive_days"],
+                        selected_stats["nonzero_rate"],
+                        selected_stats["avg_news_count"],
+                    )
+                )
+                if better:
+                    selected_df = q_df
+                    selected_stats = stats
+                    selected_query = cand_query
+
+                if not is_dead:
+                    selected_df = q_df
+                    selected_stats = stats
+                    selected_query = cand_query
+                    break
+
+            if not selected_df.empty:
+                q_df = selected_df.copy()
                 q_df["query_id"] = str(query_id)
                 merged_rows.append(q_df)
+            selected_query_text[str(query_id)] = selected_query
+            _log(
+                cfg,
+                f"query_id done id={query_id} rows={len(selected_df)} "
+                f"errors={sum(1 for k in errors if k.startswith(f'{query_id}:'))}",
+            )
 
         if merged_rows:
             merged = pd.concat(merged_rows, ignore_index=True)
@@ -599,7 +846,7 @@ def refresh_gdelt(cfg: GdeltIngestConfig, end: Optional[str] = None) -> dict:
             )
 
         inserted = upsert_gdelt_daily(con, cfg.table, merged, source="gdelt_doc_api")
-        return {
+        out = {
             "inserted_rows": int(inserted),
             "errors": errors,
             "start": start_day.isoformat(),
@@ -609,7 +856,14 @@ def refresh_gdelt(cfg: GdeltIngestConfig, end: Optional[str] = None) -> dict:
             "rows_with_query": int(merged.shape[0]),
             "query_count": len(queries),
             "query_ids": sorted(list(queries.keys())),
+            "selected_query_text": selected_query_text,
             "mode": mode,
         }
+        _log(
+            cfg,
+            f"refresh done inserted_rows={out['inserted_rows']} days_with_news={out['days_with_news']} "
+            f"rows_with_query={out['rows_with_query']} errors={len(errors)}",
+        )
+        return out
     finally:
         con.close()

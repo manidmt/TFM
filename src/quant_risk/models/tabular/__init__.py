@@ -24,6 +24,14 @@ from .tabpfn import (
     predict as predict_tabpfn,
     predict_proba as predict_proba_tabpfn,
 )
+from .gkg_change_detector import (
+    GkgChangeDetectorArtifacts,
+    GkgChangeDetectorConfig,
+    build_design_matrix as build_gkg_change_design_matrix,
+    fit as fit_gkg_change_detector,
+    predict_proba as predict_proba_gkg_change_detector,
+    select_gkg_feature_columns,
+)
 
 __all__ = [
     "XGBConfig",
@@ -46,4 +54,10 @@ __all__ = [
     "fit_tabpfn",
     "predict_tabpfn",
     "predict_proba_tabpfn",
+    "GkgChangeDetectorArtifacts",
+    "GkgChangeDetectorConfig",
+    "build_gkg_change_design_matrix",
+    "fit_gkg_change_detector",
+    "predict_proba_gkg_change_detector",
+    "select_gkg_feature_columns",
 ]
