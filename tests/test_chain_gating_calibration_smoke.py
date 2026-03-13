@@ -50,6 +50,90 @@ def test_gating_routes_low_confidence_to_persistence():
     assert np.asarray(out["gate_mask"], dtype=bool).tolist() == [True, False]
 
 
+def test_gkg_change_gate_routes_low_pchange_to_persistence():
+    mod = _load_walk_forward_module()
+    proba = np.array(
+        [
+            [0.05, 0.05, 0.90],
+            [0.80, 0.10, 0.10],
+        ],
+        dtype=float,
+    )
+    y_persist = np.array([1, 2], dtype=int)
+    p_change = np.array([0.15, 0.90], dtype=float)
+    out = mod._blend_strategy_predict(
+        proba_chain=proba,
+        y_persist=y_persist,
+        alpha=1.0,
+        beta=0.0,
+        class_thresholds=np.array([1.0, 1.0, 1.0], dtype=float),
+        gate_threshold=0.0,
+        p_change=p_change,
+        change_gate_threshold=0.50,
+    )
+    pred = np.asarray(out["pred"], dtype=int)
+    assert pred.tolist() == [1, 0]
+    assert np.asarray(out["conf_gate_mask"], dtype=bool).tolist() == [False, False]
+    assert np.asarray(out["change_gate_mask"], dtype=bool).tolist() == [True, False]
+    assert np.asarray(out["gate_mask"], dtype=bool).tolist() == [True, False]
+
+
+def test_gkg_change_alpha_weight_attenuates_alpha_toward_persistence():
+    mod = _load_walk_forward_module()
+    proba = np.array([[0.60, 0.39, 0.01]], dtype=float)
+    y_persist = np.array([1], dtype=int)
+    out = mod._blend_strategy_predict(
+        proba_chain=proba,
+        y_persist=y_persist,
+        alpha=1.0,
+        beta=0.0,
+        class_thresholds=np.array([1.0, 1.0, 1.0], dtype=float),
+        gate_threshold=0.0,
+        p_change=np.array([0.20], dtype=float),
+        change_gate_threshold=0.0,
+        change_alpha_weight=1.0,
+    )
+    pred = np.asarray(out["pred"], dtype=int)
+    alpha_vec = np.asarray(out["alpha_vec"], dtype=float)
+    alpha_vec_base = np.asarray(out["alpha_vec_base"], dtype=float)
+    alpha_multiplier = np.asarray(out["change_alpha_multiplier"], dtype=float)
+    assert pred.tolist() == [1]
+    np.testing.assert_allclose(alpha_vec_base, np.array([1.0], dtype=float))
+    np.testing.assert_allclose(alpha_multiplier, np.array([0.20], dtype=float))
+    np.testing.assert_allclose(alpha_vec, np.array([0.20], dtype=float))
+    assert np.asarray(out["gate_mask"], dtype=bool).tolist() == [False]
+
+
+def test_gkg_change_alpha_weights_by_asset_override_resolution():
+    mod = _load_walk_forward_module()
+    overrides = mod._parse_gkg_change_alpha_weights_by_asset(
+        "BTC-USD=0.0,0.1,0.2;TLT=0.0,0.05,0.1"
+    )
+    assert overrides["BTC-USD"] == (0.0, 0.1, 0.2)
+    assert overrides["TLT"] == (0.0, 0.05, 0.1)
+    grid_btc = mod._resolve_asset_specific_grid(
+        default_grid=(0.0, 0.25, 0.5),
+        asset_overrides=overrides,
+        asset_name="BTC-USD",
+        tickers=("BTC-USD",),
+    )
+    grid_tlt = mod._resolve_asset_specific_grid(
+        default_grid=(0.0, 0.25, 0.5),
+        asset_overrides=overrides,
+        asset_name="TLT",
+        tickers=("TLT",),
+    )
+    grid_default = mod._resolve_asset_specific_grid(
+        default_grid=(0.0, 0.25, 0.5),
+        asset_overrides=overrides,
+        asset_name="^GSPC",
+        tickers=("^GSPC",),
+    )
+    assert grid_btc == (0.0, 0.1, 0.2)
+    assert grid_tlt == (0.0, 0.05, 0.1)
+    assert grid_default == (0.0, 0.25, 0.5)
+
+
 def test_class_thresholds_change_argmax_decision():
     mod = _load_walk_forward_module()
     proba = np.array([[0.40, 0.35, 0.25]], dtype=float)
