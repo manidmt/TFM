@@ -14,6 +14,7 @@ poetry.lock
 
 *.sh
 *.lock
+!scripts/*.sh
 
 # Data:
 /data/raw/*
