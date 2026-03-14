@@ -21,3 +21,52 @@ macro:
     M2SL: m2
     DFF: ffr
     SOFR: sofr
+
+gkg:
+  # Official stable GKG v1 baseline for MLflow experiments.
+  profile_name: "gkg_v1_light"
+  profile_version: "2026-03-13"
+  profile_mode: "light_daily"
+  enabled: true
+  raw_table: "gdelt_gkg_raw"
+  daily_table: "news_features_daily"
+  start: "2020-01-01"
+  lookback_buffer_days: 14
+  publication_lag_bdays: 1
+  store_raw: false
+  timeout_seconds: 45
+  max_retries: 8
+  retry_backoff_seconds: 3.0
+  retry_max_sleep_seconds: 240.0
+  request_pause_seconds: 1.0
+  sample_interval_minutes: 180
+  max_files_per_day: 8
+  max_files_total: 0
+  topics:
+    macro_us: "(inflation OR recession OR unemployment OR GDP OR tariff OR treasury)"
+    fed_inflation: "(\"Federal Reserve\" OR Powell OR CPI OR PCE OR \"interest rates\")"
+    rates_yields: "(\"treasury yield\" OR \"bond yield\" OR SOFR OR \"fed funds\")"
+    crypto_market: "(bitcoin OR ethereum OR crypto OR cryptocurrency OR stablecoin)"
+    geopolitical_risk: "(war OR conflict OR sanctions OR tariff OR invasion)"
+
+# Legacy DOC timeline ingestion (deprecated, exploratory only).
+gdelt:
+  enabled: false
+  table: "gdelt_gkg_daily"
+  start: "2018-01-01"
+  lookback_buffer_days: 14
+  publication_lag_bdays: 1
+  mode: "timeline"
+  keep_artlist_sample: false
+  query: "(finance OR market OR stocks OR bitcoin OR treasury)"
+  queries: {}
+  query_candidates: {}
+  query_dead_min_nonzero_rate: 0.01
+  query_dead_min_avg_news_count: 1.0
+  max_records_per_day: 250
+  timeout_seconds: 45
+  timeline_chunk_days: 30
+  max_retries: 8
+  retry_backoff_seconds: 3.0
+  retry_max_sleep_seconds: 240.0
+  request_pause_seconds: 1.0

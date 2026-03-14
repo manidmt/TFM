@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Iterable
+import re
 
 import duckdb
 import pandas as pd
@@ -22,6 +23,9 @@ class BuildFeaturesConfig:
     db_path: str
     prices_table: str = "raw_prices"
     macro_table: str = "macro_features"
+    news_source_table: str = "news_features_daily"
+    # Deprecated fallback for legacy DOC timeline experiments.
+    gdelt_table: str = "gdelt_gkg_daily"
     out_table: str = "features_daily"
     calendar_freq: str = "B"  # Business day frequency
     start: str | None = None
@@ -38,6 +42,40 @@ class BuildFeaturesConfig:
     return_shock_quantiles: tuple[float, ...] = (0.8, 0.9)
     volume_z_window: int = 20
     cross_corr_window: int = 20
+    news_enabled: bool = False
+    news_publication_lag_bdays: int = 1
+    news_windows: tuple[int, ...] = (3, 10, 20)
+    news_include_roll_sum: bool = True
+    news_include_roll_mean: bool = True
+    news_include_roll_std: bool = True
+    news_include_tone_std: bool = False
+    news_include_tone_neg_share: bool = False
+    news_attn_z_window: int = 252
+    news_attn_shock_threshold: float = 2.0
+    news_shock_windows: tuple[int, ...] = (3, 10, 20)
+    news_compact_mode: bool = False
+    news_topic_share_enabled: bool = True
+    news_health_min_nonzero_rate: float = 0.01
+    news_health_min_unique_values: int = 3
+    news_health_drop_dead_queries: bool = True
+    news_health_fail_if_all_dead: bool = True
+    news_include_interactions: bool = True
+    news_query_ids: tuple[str, ...] = ()
+
+
+def _table_exists(con: duckdb.DuckDBPyConnection, table: str) -> bool:
+    """
+    Check if a table exists in DuckDB main schema.
+    """
+    row = con.execute(
+        """
+        SELECT COUNT(*)
+        FROM information_schema.tables
+        WHERE table_schema='main' AND table_name=?
+        """,
+        [table],
+    ).fetchone()
+    return bool(row and int(row[0]) > 0)
 
 
 def _rolling_percentile_last(values: np.ndarray) -> float:
@@ -55,6 +93,282 @@ def _macro_transform(s: pd.Series, method: str) -> pd.Series:
         return np.log(s).diff()
     else:
         raise ValueError(f"Unknown macro transform method: {method}")
+
+
+def _sanitize_query_id(query_id: str) -> str:
+    """
+    Convert query_id to a safe lowercase suffix for feature names.
+    """
+    s = re.sub(r"[^a-zA-Z0-9]+", "_", str(query_id).strip().lower()).strip("_")
+    return s or "default"
+
+
+def _load_news_block(
+    con: duckdb.DuckDBPyConnection,
+    cfg: BuildFeaturesConfig,
+    master_idx: pd.DatetimeIndex,
+) -> pd.DataFrame:
+    """
+    Build a date-aligned news feature block applying publication lag before rolling windows.
+    """
+    if not cfg.news_enabled:
+        return pd.DataFrame({"date": master_idx})
+
+    primary_table = str(cfg.news_source_table).strip()
+    fallback_table = str(cfg.gdelt_table).strip()
+    candidates: list[str] = []
+    for t in (primary_table, fallback_table):
+        if t and t not in candidates:
+            candidates.append(t)
+
+    selected_table = next((t for t in candidates if _table_exists(con, t)), None)
+    if selected_table is None:
+        raise RuntimeError(
+            "No configured news table found while news_features.enabled=true. "
+            f"Tried={candidates!r}"
+        )
+    if selected_table != primary_table:
+        print(
+            "[build_features][news] using legacy fallback table "
+            f"{selected_table!r}; preferred source is {primary_table!r}."
+        )
+
+    try:
+        table_cols = [r[1] for r in con.execute(f"PRAGMA table_info('{selected_table}')").fetchall()]
+        has_query_id = "query_id" in table_cols
+        if has_query_id:
+            dfn = con.execute(
+                f"""
+                SELECT query_id, date, news_count, tone_mean, tone_std, tone_neg_share
+                FROM {selected_table}
+                ORDER BY query_id, date
+                """
+            ).df()
+        else:
+            dfn = con.execute(
+                f"""
+                SELECT 'default' AS query_id, date, news_count, tone_mean, tone_std, tone_neg_share
+                FROM {selected_table}
+                ORDER BY date
+                """
+            ).df()
+    except Exception as exc:
+        raise RuntimeError(
+            f"News table '{selected_table}' is unavailable while news_features.enabled=true."
+        ) from exc
+
+    out = pd.DataFrame({"date": master_idx})
+
+    configured_ids_raw = [str(q).strip() for q in cfg.news_query_ids if str(q).strip()]
+    configured_ids: list[str] = []
+    for query_id in configured_ids_raw:
+        sanitized = _sanitize_query_id(query_id)
+        if sanitized and sanitized not in configured_ids:
+            configured_ids.append(sanitized)
+    if dfn.empty:
+        query_ids = configured_ids or ["default"]
+        dfn = pd.DataFrame({"query_id": query_ids})
+    else:
+        dfn["query_id"] = dfn["query_id"].astype(str).map(_sanitize_query_id)
+        dfn["date"] = pd.to_datetime(dfn["date"])
+        dfn = (
+            dfn.groupby(["query_id", "date"], as_index=False)
+            .agg(
+                news_count=("news_count", "sum"),
+                tone_mean=("tone_mean", "mean"),
+                tone_std=("tone_std", "mean"),
+                tone_neg_share=("tone_neg_share", "mean"),
+            )
+            .sort_values(["query_id", "date"])
+        )
+        query_ids = configured_ids or sorted(dfn["query_id"].unique().tolist())
+    use_suffix = len(query_ids) > 1 or len(configured_ids) > 0
+
+    windows = tuple(sorted({int(w) for w in cfg.news_windows if int(w) > 0}))
+    shock_windows = tuple(sorted({int(w) for w in cfg.news_shock_windows if int(w) > 0}))
+    attn_z_window = max(2, int(cfg.news_attn_z_window))
+    attn_shock_threshold = float(cfg.news_attn_shock_threshold)
+    lag_bdays = int(cfg.news_publication_lag_bdays)
+    internal_raw_cols = ["news_count", "tone_mean", "tone_std", "tone_neg_share"]
+    raw_cols = ["news_count", "tone_mean"]
+    if bool(cfg.news_include_tone_std):
+        raw_cols.append("tone_std")
+    if bool(cfg.news_include_tone_neg_share):
+        raw_cols.append("tone_neg_share")
+    base_cols = [
+        *raw_cols,
+        "log_news",
+        "log_news_count",
+        "attn_z",
+        "attention_z",
+        "attention_shock_z",
+        "attn_shock",
+        "tone_change_1d",
+        "tone_change_3d",
+        "neg_share_change_1d",
+    ]
+    if bool(cfg.news_topic_share_enabled):
+        base_cols.extend(["topic_share", "topic_share_z"])
+
+    aligned_sub_by_query: dict[str, pd.DataFrame] = {}
+    health_rows: list[dict[str, float | int | str | bool]] = []
+
+    for query_id in query_ids:
+        if dfn.empty or "date" not in dfn.columns:
+            sub = pd.DataFrame({"date": master_idx})
+            for c in internal_raw_cols:
+                sub[c] = 0.0
+        else:
+            sub = dfn[dfn["query_id"] == query_id].copy()
+            sub = (
+                sub.set_index("date")
+                .reindex(master_idx)
+                .reset_index()
+                .rename(columns={"index": "date"})
+            )
+            sub["news_count"] = pd.to_numeric(sub["news_count"], errors="coerce").fillna(0.0)
+            sub["tone_mean"] = pd.to_numeric(sub["tone_mean"], errors="coerce").fillna(0.0)
+            sub["tone_std"] = pd.to_numeric(sub["tone_std"], errors="coerce").fillna(0.0)
+            sub["tone_neg_share"] = pd.to_numeric(sub["tone_neg_share"], errors="coerce").fillna(0.0)
+
+        if lag_bdays > 0:
+            # Anti-leakage: lag is applied before any rolling/derived statistics.
+            for c in internal_raw_cols:
+                sub[c] = sub[c].shift(lag_bdays)
+        aligned_sub_by_query[query_id] = sub
+
+    active_query_ids: list[str] = []
+    for query_id in query_ids:
+        sub = aligned_sub_by_query[query_id]
+        news_s = pd.to_numeric(sub["news_count"], errors="coerce")
+        nonzero_rate = float((news_s.fillna(0.0) > 0.0).mean())
+        n_unique = int(news_s.nunique(dropna=True))
+        std = float(news_s.std(skipna=True) if news_s.notna().any() else 0.0)
+        is_dead = bool(
+            nonzero_rate < float(cfg.news_health_min_nonzero_rate)
+            or n_unique < int(cfg.news_health_min_unique_values)
+        )
+        health_rows.append(
+            {
+                "query_id": str(query_id),
+                "nonzero_rate": nonzero_rate,
+                "n_unique_news_count": n_unique,
+                "std_news_count": std,
+                "is_dead": is_dead,
+            }
+        )
+        if is_dead and bool(cfg.news_health_drop_dead_queries):
+            print(
+                "[build_features][news] dropping dead query_id="
+                f"{query_id!r} nonzero_rate={nonzero_rate:.4f} n_unique={n_unique} std={std:.4f}"
+            )
+            continue
+        active_query_ids.append(query_id)
+
+    news_health = {
+        "query_health": health_rows,
+        "active_query_ids": [str(q) for q in active_query_ids],
+        "dropped_query_ids": [
+            r["query_id"]
+            for r in health_rows
+            if bool(r.get("is_dead", False)) and bool(cfg.news_health_drop_dead_queries)
+        ],
+    }
+    out.attrs["news_health"] = news_health
+
+    if not active_query_ids:
+        if bool(cfg.news_health_fail_if_all_dead):
+            raise RuntimeError(
+                "All configured news query channels appear dead after alignment/lag checks; "
+                "check query syntax or ingest coverage."
+            )
+        out.attrs["news_health"] = news_health
+        return out
+
+    total_news_count = np.zeros(len(master_idx), dtype=float)
+    if bool(cfg.news_topic_share_enabled):
+        for query_id in active_query_ids:
+            s = pd.to_numeric(aligned_sub_by_query[query_id]["news_count"], errors="coerce").fillna(0.0)
+            total_news_count += s.clip(lower=0.0).to_numpy(dtype=float)
+
+    for query_id in active_query_ids:
+        sub = aligned_sub_by_query[query_id].copy()
+
+        sub["log_news"] = np.log1p(sub["news_count"].clip(lower=0.0))
+        sub["log_news_count"] = sub["log_news"]
+        roll_mu = sub["log_news"].rolling(attn_z_window).mean()
+        roll_sd = sub["log_news"].rolling(attn_z_window).std().replace(0.0, np.nan)
+        sub["attn_z"] = (sub["log_news"] - roll_mu) / roll_sd
+        sub["attn_z"] = sub["attn_z"].replace([np.inf, -np.inf], np.nan).fillna(0.0)
+        sub["attention_z"] = sub["attn_z"]
+        # Backward-compatible alias.
+        sub["attention_shock_z"] = sub["attn_z"]
+        sub["attn_shock"] = (sub["attn_z"] > attn_shock_threshold).astype(float)
+        sub["tone_change_1d"] = sub["tone_mean"].diff(1)
+        sub["tone_change_3d"] = sub["tone_mean"].diff(3)
+        sub["neg_share_change_1d"] = sub["tone_neg_share"].diff(1)
+        if bool(cfg.news_topic_share_enabled):
+            numer = pd.to_numeric(sub["news_count"], errors="coerce").fillna(0.0).clip(lower=0.0).to_numpy(dtype=float)
+            den = np.where(total_news_count > 0.0, total_news_count, np.nan)
+            share = np.divide(numer, den)
+            share = np.nan_to_num(share, nan=0.0, posinf=0.0, neginf=0.0)
+            sub["topic_share"] = share
+            share_mu = sub["topic_share"].rolling(attn_z_window).mean()
+            share_sd = sub["topic_share"].rolling(attn_z_window).std().replace(0.0, np.nan)
+            sub["topic_share_z"] = (sub["topic_share"] - share_mu) / share_sd
+            sub["topic_share_z"] = sub["topic_share_z"].replace([np.inf, -np.inf], np.nan).fillna(0.0)
+
+        shock_cols: list[str] = []
+        for w in shock_windows:
+            c = f"shock_days_w{w}"
+            sub[c] = sub["attn_shock"].rolling(w).sum()
+            shock_cols.append(c)
+
+        tone_window_cols: list[str] = []
+        for w in windows:
+            c_mu = f"tone_mean_w{w}"
+            c_sd = f"tone_std_w{w}"
+            sub[c_mu] = sub["tone_mean"].rolling(w).mean()
+            sub[c_sd] = sub["tone_mean"].rolling(w).std()
+            tone_window_cols.extend([c_mu, c_sd])
+
+        if not bool(cfg.news_compact_mode):
+            for c in base_cols:
+                for w in windows:
+                    roll = sub[c].rolling(w)
+                    if cfg.news_include_roll_sum:
+                        sub[f"{c}_sum_w{w}"] = roll.sum()
+                    if cfg.news_include_roll_mean:
+                        sub[f"{c}_mean_w{w}"] = roll.mean()
+                    if cfg.news_include_roll_std:
+                        sub[f"{c}_std_w{w}"] = roll.std()
+
+        cols_to_merge = [c for c in [*base_cols, *shock_cols, *tone_window_cols] if c in sub.columns]
+        if not bool(cfg.news_compact_mode):
+            for c in base_cols:
+                for w in windows:
+                    if cfg.news_include_roll_sum:
+                        name = f"{c}_sum_w{w}"
+                        if name in sub.columns:
+                            cols_to_merge.append(name)
+                    if cfg.news_include_roll_mean:
+                        name = f"{c}_mean_w{w}"
+                        if name in sub.columns:
+                            cols_to_merge.append(name)
+                    if cfg.news_include_roll_std:
+                        name = f"{c}_std_w{w}"
+                        if name in sub.columns:
+                            cols_to_merge.append(name)
+        cols_to_merge = list(dict.fromkeys(cols_to_merge))
+        sub = sub[["date", *cols_to_merge]].copy()
+        if use_suffix:
+            suffix = _sanitize_query_id(query_id)
+            rename_map = {c: f"{c}_{suffix}" for c in cols_to_merge}
+            sub = sub.rename(columns=rename_map)
+        out = out.merge(sub, on="date", how="left")
+
+    out.attrs["news_health"] = news_health
+    return out
     
 def build_features(cfg: BuildFeaturesConfig, tickers: Iterable[str]) -> dict:
     con = duckdb.connect(cfg.db_path)
@@ -129,6 +443,8 @@ def build_features(cfg: BuildFeaturesConfig, tickers: Iterable[str]) -> dict:
                 dfm2[f"{tc}_lag{lag}"] = dfm2[tc].shift(lag)
 
         # Build per ticker features aligned to master calendar
+        news_block = _load_news_block(con, cfg, master_idx)
+        news_health = dict(news_block.attrs.get("news_health", {}))
         all_out = []
         for t in tickers:
             sub = dfp[dfp["ticker"] == t].copy()
@@ -198,6 +514,49 @@ def build_features(cfg: BuildFeaturesConfig, tickers: Iterable[str]) -> dict:
 
             # Merge macro (already on master_idx)
             merged = sub.merge(dfm2, on="date", how="left")
+            if cfg.news_enabled:
+                merged = merged.merge(news_block, on="date", how="left")
+                if bool(cfg.news_include_interactions):
+                    attn_cols = [c for c in merged.columns if c == "attn_z" or c.startswith("attn_z_")]
+                    sigma_col = None
+                    for sigma_candidate in ("garch_sigma_t", "sigma_t"):
+                        if sigma_candidate in merged.columns:
+                            sigma_col = sigma_candidate
+                            break
+                    for attn_col in attn_cols:
+                        suffix = "" if attn_col == "attn_z" else attn_col[len("attn_z") :]
+                        merged[f"attn_z_x_rv20{suffix}"] = merged[attn_col] * merged["rv_20"]
+                        if "rv_5" in merged.columns:
+                            merged[f"attn_z_x_rv5{suffix}"] = merged[attn_col] * merged["rv_5"]
+                        if sigma_col is not None:
+                            merged[f"attn_z_x_garch_sigma_t{suffix}"] = merged[attn_col] * merged[sigma_col]
+
+                        tone_chg_col = f"tone_change_1d{suffix}"
+                        if tone_chg_col in merged.columns:
+                            merged[f"tone_change_1d_x_attn_z{suffix}"] = merged[tone_chg_col] * merged[attn_col]
+                            merged[f"tone_change_1d_x_rv20{suffix}"] = merged[tone_chg_col] * merged["rv_20"]
+
+                        tone_mean_col = f"tone_mean{suffix}"
+                        if tone_mean_col in merged.columns:
+                            merged[f"abs_tone_mean_x_attn_z{suffix}"] = merged[tone_mean_col].abs() * merged[attn_col]
+                        tone_neg_col = f"tone_neg_share{suffix}"
+                        if sigma_col is not None and tone_neg_col in merged.columns:
+                            merged[f"tone_neg_share_x_garch_sigma_t{suffix}"] = (
+                                merged[tone_neg_col] * merged[sigma_col]
+                            )
+                    topic_cols = [
+                        c for c in merged.columns if c == "topic_share_z" or c.startswith("topic_share_z_")
+                    ]
+                    for topic_col in topic_cols:
+                        suffix = "" if topic_col == "topic_share_z" else topic_col[len("topic_share_z") :]
+                        merged[f"topic_share_z_x_rv20{suffix}"] = merged[topic_col] * merged["rv_20"]
+                        if "rv_5" in merged.columns:
+                            merged[f"topic_share_z_x_rv5{suffix}"] = merged[topic_col] * merged["rv_5"]
+                        tone_chg_col = f"tone_change_1d{suffix}"
+                        if tone_chg_col in merged.columns:
+                            merged[f"tone_change_1d_x_topic_share_z{suffix}"] = (
+                                merged[tone_chg_col] * merged[topic_col]
+                            )
 
             all_out.append(merged)
 
@@ -225,7 +584,18 @@ def build_features(cfg: BuildFeaturesConfig, tickers: Iterable[str]) -> dict:
         out = out.merge(cross, on="date", how="left")
 
         # Drop rows with insufficient history (basic)
-        min_lag = max(max(cfg.return_lags, default=0), max(cfg.macro_lags, default=0), max(cfg.rv_windows, default=0))
+        news_lag = 0
+        if cfg.news_enabled:
+            news_hist = [int(w) for w in cfg.news_windows if int(w) > 0]
+            news_hist += [int(w) for w in cfg.news_shock_windows if int(w) > 0]
+            news_hist += [int(cfg.news_attn_z_window)]
+            news_lag = int(cfg.news_publication_lag_bdays) + max(news_hist or [0])
+        min_lag = max(
+            max(cfg.return_lags, default=0),
+            max(cfg.macro_lags, default=0),
+            max(cfg.rv_windows, default=0),
+            news_lag,
+        )
         out = out.sort_values(["ticker", "date"])
         out["rownum"] = out.groupby("ticker").cumcount()
         out = out[out["rownum"] >= min_lag].drop(columns=["rownum"])
@@ -241,6 +611,7 @@ def build_features(cfg: BuildFeaturesConfig, tickers: Iterable[str]) -> dict:
             "end": str(out["date"].max().date()),
             "tickers": list(tickers),
             "out_table": cfg.out_table,
+            "news_health": news_health,
         }
     
     finally:
