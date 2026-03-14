@@ -30,3 +30,69 @@ def test_get_git_sha_returns_string():
     sha = get_git_sha()
     assert isinstance(sha, str)
     assert len(sha) > 0
+
+
+import pytest
+from unittest.mock import MagicMock, patch
+
+
+def test_log_params_safe_swallows_errors_when_not_strict():
+    cfg = MlflowConfig(enabled=True, strict=False)
+    with patch("quant_risk.tracking.mlflow_utils._MLFLOW_AVAILABLE", True):
+        with patch("quant_risk.tracking.mlflow_utils.mlflow") as mock_mlflow:
+            mock_mlflow.log_params.side_effect = RuntimeError("server down")
+            # Should not raise
+            from quant_risk.tracking.mlflow_utils import log_params_safe
+            log_params_safe(cfg, {"horizon": 5})
+
+
+def test_log_params_safe_raises_in_strict_mode():
+    cfg = MlflowConfig(enabled=True, strict=True)
+    with patch("quant_risk.tracking.mlflow_utils._MLFLOW_AVAILABLE", True):
+        with patch("quant_risk.tracking.mlflow_utils.mlflow") as mock_mlflow:
+            mock_mlflow.log_params.side_effect = RuntimeError("server down")
+            from quant_risk.tracking.mlflow_utils import log_params_safe
+            with pytest.raises(RuntimeError):
+                log_params_safe(cfg, {"horizon": 5})
+
+
+def test_log_params_safe_is_noop_when_disabled():
+    cfg = MlflowConfig(enabled=False)
+    with patch("quant_risk.tracking.mlflow_utils.mlflow") as mock_mlflow:
+        from quant_risk.tracking.mlflow_utils import log_params_safe
+        log_params_safe(cfg, {"horizon": 5})
+        mock_mlflow.log_params.assert_not_called()
+
+
+def test_log_metrics_safe_swallows_errors_when_not_strict():
+    cfg = MlflowConfig(enabled=True, strict=False)
+    with patch("quant_risk.tracking.mlflow_utils._MLFLOW_AVAILABLE", True):
+        with patch("quant_risk.tracking.mlflow_utils.mlflow") as mock_mlflow:
+            mock_mlflow.log_metrics.side_effect = RuntimeError("server down")
+            from quant_risk.tracking.mlflow_utils import log_metrics_safe
+            log_metrics_safe(cfg, {"robust_score": 0.12})
+
+
+def test_log_metrics_safe_skips_non_finite():
+    import math
+    cfg = MlflowConfig(enabled=True, strict=False)
+    with patch("quant_risk.tracking.mlflow_utils._MLFLOW_AVAILABLE", True):
+        with patch("quant_risk.tracking.mlflow_utils.mlflow") as mock_mlflow:
+            from quant_risk.tracking.mlflow_utils import log_metrics_safe
+            log_metrics_safe(cfg, {"a": float("nan"), "b": float("inf"), "c": 0.5})
+            called_metrics = mock_mlflow.log_metrics.call_args[0][0]
+            assert "a" not in called_metrics
+            assert "b" not in called_metrics
+            assert called_metrics["c"] == pytest.approx(0.5)
+
+
+def test_log_artifact_safe_warns_on_missing_file():
+    cfg = MlflowConfig(enabled=True, strict=False)
+    with patch("quant_risk.tracking.mlflow_utils._MLFLOW_AVAILABLE", True):
+        with patch("quant_risk.tracking.mlflow_utils.mlflow"):
+            import warnings
+            from quant_risk.tracking.mlflow_utils import log_artifact_safe
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                log_artifact_safe(cfg, "/nonexistent/path/file.csv")
+            assert any("artifact not found" in str(x.message) for x in w)

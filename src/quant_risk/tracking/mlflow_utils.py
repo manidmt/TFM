@@ -5,15 +5,18 @@ so callers need no guard logic of their own.
 """
 from __future__ import annotations
 
+import math
 import subprocess
 import warnings
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 try:
-    import mlflow as _mlflow  # noqa: F401
+    import mlflow  # noqa: F401
     _MLFLOW_AVAILABLE = True
 except ImportError:
+    mlflow = None  # type: ignore[assignment]
     _MLFLOW_AVAILABLE = False
 
 
@@ -74,18 +77,49 @@ def end_run_safe(cfg: MlflowConfig, status: str = "FINISHED") -> None:
 
 
 def log_params_safe(cfg: MlflowConfig, params: dict[str, Any]) -> None:
-    """Log parameters to the active MLflow run. No-op when tracking is disabled."""
-    return None
+    """Log a dict of params; values are coerced to str and truncated to 250 chars."""
+    if not is_enabled(cfg):
+        return
+    try:
+        str_params = {
+            str(k): str(v)[:250]
+            for k, v in params.items()
+            if v is not None
+        }
+        if str_params:
+            mlflow.log_params(str_params)
+    except Exception as exc:
+        _warn_or_raise(cfg, exc)
 
 
-def log_metrics_safe(cfg: MlflowConfig, metrics) -> None:
-    """Log metrics to the active MLflow run. No-op when tracking is disabled."""
-    return None
+def log_metrics_safe(cfg: MlflowConfig, metrics: dict[str, Any]) -> None:
+    """Log a dict of float metrics; NaN/Inf values are silently skipped."""
+    if not is_enabled(cfg):
+        return
+    try:
+        clean = {
+            str(k): float(v)
+            for k, v in metrics.items()
+            if v is not None and _is_finite_float(v)
+        }
+        if clean:
+            mlflow.log_metrics(clean)
+    except Exception as exc:
+        _warn_or_raise(cfg, exc)
 
 
 def log_artifact_safe(cfg: MlflowConfig, path) -> None:
-    """Log an artifact to the active MLflow run. No-op when tracking is disabled."""
-    return None
+    """Log an existing file as an MLflow artifact; warns if file not found."""
+    if not is_enabled(cfg):
+        return
+    try:
+        p = Path(path)
+        if p.exists():
+            mlflow.log_artifact(str(p))
+        else:
+            warnings.warn(f"[mlflow] artifact not found: {p}")
+    except Exception as exc:
+        _warn_or_raise(cfg, exc)
 
 
 def log_dict_artifact(cfg: MlflowConfig, data: dict[str, Any], artifact_name: str) -> None:
@@ -101,3 +135,10 @@ def read_latest_gkg_manifest(manifest_path: str) -> dict[str, Any]:
 def build_run_context(cfg: MlflowConfig, **kwargs: Any) -> dict[str, Any]:
     """Build a run context dict for tagging MLflow runs."""
     return {}
+
+
+def _is_finite_float(v: Any) -> bool:
+    try:
+        return math.isfinite(float(v))
+    except (TypeError, ValueError):
+        return False
