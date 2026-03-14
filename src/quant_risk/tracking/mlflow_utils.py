@@ -5,8 +5,10 @@ so callers need no guard logic of their own.
 """
 from __future__ import annotations
 
+import json
 import math
 import subprocess
+import tempfile
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -72,8 +74,13 @@ def start_child_run(cfg: MlflowConfig, run_name: str, tags: dict[str, Any] | Non
 
 
 def end_run_safe(cfg: MlflowConfig, status: str = "FINISHED") -> None:
-    """End the active MLflow run. No-op when tracking is disabled."""
-    return None
+    """End the active MLflow run; no-op when tracking is disabled."""
+    if not is_enabled(cfg):
+        return
+    try:
+        mlflow.end_run()
+    except Exception as exc:
+        _warn_or_raise(cfg, exc)
 
 
 def log_params_safe(cfg: MlflowConfig, params: dict[str, Any]) -> None:
@@ -122,9 +129,20 @@ def log_artifact_safe(cfg: MlflowConfig, path) -> None:
         _warn_or_raise(cfg, exc)
 
 
-def log_dict_artifact(cfg: MlflowConfig, data: dict[str, Any], artifact_name: str) -> None:
-    """Log a dict as a JSON artifact. No-op when tracking is disabled."""
-    return None
+def log_dict_artifact(cfg: MlflowConfig, data: dict[str, Any], filename: str) -> None:
+    """Serialize *data* to a temp file named *filename* and log it as an artifact."""
+    if not is_enabled(cfg):
+        return
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fpath = Path(tmpdir) / filename
+            fpath.write_text(
+                json.dumps(data, indent=2, ensure_ascii=False, default=str),
+                encoding="utf-8",
+            )
+            mlflow.log_artifact(str(fpath))
+    except Exception as exc:
+        _warn_or_raise(cfg, exc)
 
 
 def read_latest_gkg_manifest(manifest_path: str) -> dict[str, Any]:

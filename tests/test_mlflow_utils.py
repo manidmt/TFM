@@ -96,3 +96,49 @@ def test_log_artifact_safe_warns_on_missing_file():
                 warnings.simplefilter("always")
                 log_artifact_safe(cfg, "/nonexistent/path/file.csv")
             assert any("artifact not found" in str(x.message) for x in w)
+
+
+import json
+import tempfile
+from pathlib import Path
+
+
+def test_log_dict_artifact_writes_correct_filename():
+    cfg = MlflowConfig(enabled=True, strict=False)
+    # Capture path AND content inside the side_effect while the temp dir still exists.
+    captured: dict = {}
+    with patch("quant_risk.tracking.mlflow_utils._MLFLOW_AVAILABLE", True):
+        with patch("quant_risk.tracking.mlflow_utils.mlflow") as mock_mlflow:
+            def capture_artifact(path, **kwargs):
+                captured["path"] = path
+                captured["content"] = json.loads(Path(path).read_text())
+            mock_mlflow.log_artifact.side_effect = capture_artifact
+            from quant_risk.tracking.mlflow_utils import log_dict_artifact
+            log_dict_artifact(cfg, {"key": "value"}, "run_context.json")
+    assert captured["path"].endswith("run_context.json")
+    assert captured["content"]["key"] == "value"
+
+
+def test_log_dict_artifact_is_noop_when_disabled():
+    cfg = MlflowConfig(enabled=False)
+    with patch("quant_risk.tracking.mlflow_utils.mlflow") as mock_mlflow:
+        from quant_risk.tracking.mlflow_utils import log_dict_artifact
+        log_dict_artifact(cfg, {"key": "value"}, "test.json")
+        mock_mlflow.log_artifact.assert_not_called()
+
+
+def test_end_run_safe_is_noop_when_disabled():
+    cfg = MlflowConfig(enabled=False)
+    with patch("quant_risk.tracking.mlflow_utils.mlflow") as mock_mlflow:
+        from quant_risk.tracking.mlflow_utils import end_run_safe
+        end_run_safe(cfg)
+        mock_mlflow.end_run.assert_not_called()
+
+
+def test_end_run_safe_swallows_errors():
+    cfg = MlflowConfig(enabled=True, strict=False)
+    with patch("quant_risk.tracking.mlflow_utils._MLFLOW_AVAILABLE", True):
+        with patch("quant_risk.tracking.mlflow_utils.mlflow") as mock_mlflow:
+            mock_mlflow.end_run.side_effect = RuntimeError("already ended")
+            from quant_risk.tracking.mlflow_utils import end_run_safe
+            end_run_safe(cfg)  # should not raise
