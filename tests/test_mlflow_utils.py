@@ -20,9 +20,10 @@ def test_is_enabled_false_by_default():
 
 
 def test_is_enabled_true_when_set():
+    from unittest.mock import patch
     cfg = MlflowConfig(enabled=True)
-    # mlflow is installed in this env, so this should return True
-    assert is_enabled(cfg) is True
+    with patch("quant_risk.tracking.mlflow_utils._MLFLOW_AVAILABLE", True):
+        assert is_enabled(cfg) is True
 
 
 def test_get_git_sha_returns_string():

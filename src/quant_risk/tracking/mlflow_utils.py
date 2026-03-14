@@ -78,12 +78,12 @@ def log_params_safe(cfg: MlflowConfig, params: dict[str, Any]) -> None:
     return None
 
 
-def log_metrics_safe(cfg: MlflowConfig, metrics: dict[str, float], step: int | None = None) -> None:
+def log_metrics_safe(cfg: MlflowConfig, metrics) -> None:
     """Log metrics to the active MLflow run. No-op when tracking is disabled."""
     return None
 
 
-def log_artifact_safe(cfg: MlflowConfig, local_path: str, artifact_path: str | None = None) -> None:
+def log_artifact_safe(cfg: MlflowConfig, path) -> None:
     """Log an artifact to the active MLflow run. No-op when tracking is disabled."""
     return None
 
