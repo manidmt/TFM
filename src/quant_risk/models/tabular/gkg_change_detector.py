@@ -220,12 +220,15 @@ def fit(
 
     model = make_model(cfg)
     model.fit(x, y)
-    p_train = predict_proba_change(model, x)
-    calibrator = _fit_binary_calibrator(
-        p_change=p_train,
-        y_true=y,
-        method=str(cfg.calibration_method),
-    )
+    if str(cfg.model_type).lower().strip() == "tabpfn":
+        calibrator: dict = {"method": "none", "model": None}
+    else:
+        p_train = predict_proba_change(model, x)
+        calibrator = _fit_binary_calibrator(
+            p_change=p_train,
+            y_true=y,
+            method=str(cfg.calibration_method),
+        )
     return GkgChangeDetectorArtifacts(
         model=model,
         model_type=str(cfg.model_type).lower().strip(),
