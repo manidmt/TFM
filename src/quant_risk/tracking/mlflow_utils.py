@@ -63,14 +63,43 @@ def _warn_or_raise(cfg: MlflowConfig, exc: Exception) -> None:
 # Stubs – to be implemented in subsequent tasks
 # ---------------------------------------------------------------------------
 
-def start_parent_run(cfg: MlflowConfig, tags: dict[str, Any] | None = None) -> Any:
-    """Start a parent MLflow run. No-op when tracking is disabled."""
-    return None
+def start_parent_run(
+    cfg: MlflowConfig,
+    run_name: str = "",
+    tags: dict[str, str] | None = None,
+) -> Any:
+    """Configure the MLflow experiment and start the parent run.
+
+    Returns the active MLflow run object, or None when tracking is disabled.
+    """
+    if not is_enabled(cfg):
+        return None
+    try:
+        mlflow.set_tracking_uri(cfg.tracking_uri)
+        mlflow.set_experiment(cfg.experiment_name)
+        merged_tags = {**(tags or {}), **cfg.extra_tags}
+        return mlflow.start_run(run_name=run_name, tags=merged_tags)
+    except Exception as exc:
+        _warn_or_raise(cfg, exc)
+        return None
 
 
-def start_child_run(cfg: MlflowConfig, run_name: str, tags: dict[str, Any] | None = None) -> Any:
-    """Start a child MLflow run. No-op when tracking is disabled."""
-    return None
+def start_child_run(
+    cfg: MlflowConfig,
+    run_name: str,
+    tags: dict[str, str] | None = None,
+) -> Any:
+    """Start a nested child run inside the active parent run.
+
+    Returns the active MLflow run object, or None when tracking is disabled.
+    """
+    if not is_enabled(cfg):
+        return None
+    try:
+        return mlflow.start_run(run_name=run_name, nested=True, tags=tags or {})
+    except Exception as exc:
+        _warn_or_raise(cfg, exc)
+        return None
 
 
 def end_run_safe(cfg: MlflowConfig, status: str = "FINISHED") -> None:

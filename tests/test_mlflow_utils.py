@@ -142,3 +142,47 @@ def test_end_run_safe_swallows_errors():
             mock_mlflow.end_run.side_effect = RuntimeError("already ended")
             from quant_risk.tracking.mlflow_utils import end_run_safe
             end_run_safe(cfg)  # should not raise
+
+
+def test_start_parent_run_is_noop_when_disabled():
+    cfg = MlflowConfig(enabled=False)
+    with patch("quant_risk.tracking.mlflow_utils.mlflow") as mock_mlflow:
+        from quant_risk.tracking.mlflow_utils import start_parent_run
+        result = start_parent_run(cfg, run_name="test_run", tags={})
+        assert result is None
+        mock_mlflow.start_run.assert_not_called()
+
+
+def test_start_parent_run_sets_experiment_and_uri():
+    cfg = MlflowConfig(enabled=True, tracking_uri="file:./test_mlruns", experiment_name="my_exp")
+    with patch("quant_risk.tracking.mlflow_utils._MLFLOW_AVAILABLE", True):
+        with patch("quant_risk.tracking.mlflow_utils.mlflow") as mock_mlflow:
+            mock_mlflow.start_run.return_value = MagicMock()
+            from quant_risk.tracking.mlflow_utils import start_parent_run
+            start_parent_run(cfg, run_name="my_run", tags={"k": "v"})
+            mock_mlflow.set_tracking_uri.assert_called_once_with("file:./test_mlruns")
+            mock_mlflow.set_experiment.assert_called_once_with("my_exp")
+            mock_mlflow.start_run.assert_called_once_with(
+                run_name="my_run", tags={"k": "v"}
+            )
+
+
+def test_start_child_run_is_noop_when_disabled():
+    cfg = MlflowConfig(enabled=False)
+    with patch("quant_risk.tracking.mlflow_utils.mlflow") as mock_mlflow:
+        from quant_risk.tracking.mlflow_utils import start_child_run
+        result = start_child_run(cfg, run_name="child", tags={})
+        assert result is None
+        mock_mlflow.start_run.assert_not_called()
+
+
+def test_start_child_run_uses_nested_flag():
+    cfg = MlflowConfig(enabled=True)
+    with patch("quant_risk.tracking.mlflow_utils._MLFLOW_AVAILABLE", True):
+        with patch("quant_risk.tracking.mlflow_utils.mlflow") as mock_mlflow:
+            mock_mlflow.start_run.return_value = MagicMock()
+            from quant_risk.tracking.mlflow_utils import start_child_run
+            start_child_run(cfg, run_name="asset=GSPC", tags={"asset": "GSPC"})
+            mock_mlflow.start_run.assert_called_once_with(
+                run_name="asset=GSPC", nested=True, tags={"asset": "GSPC"}
+            )
