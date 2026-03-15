@@ -127,8 +127,18 @@ def make_model(cfg: GkgChangeDetectorConfig):
             random_state=int(cfg.random_state),
         )
     if model_type == "tabpfn":
-        raise NotImplementedError(
-            "model_type='tabpfn' is reserved for future extension in the change detector."
+        try:
+            from tabpfn import TabPFNClassifier
+        except ImportError as e:
+            raise ImportError(
+                "tabpfn no está instalado. Instala con: poetry add tabpfn"
+            ) from e
+        set_global_seed(cfg.seed, use_torch=True)
+        return TabPFNClassifier(
+            n_estimators=cfg.tabpfn_n_estimators,
+            softmax_temperature=cfg.tabpfn_softmax_temperature,
+            balance_probabilities=cfg.tabpfn_balance_probabilities,
+            random_state=int(cfg.random_state),
         )
     raise ValueError(f"Invalid GKG change detector model_type={cfg.model_type!r}")
 

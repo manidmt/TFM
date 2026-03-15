@@ -18,3 +18,9 @@ def test_tabpfn_config_defaults():
     assert cfg.tabpfn_n_estimators == 8
     assert cfg.tabpfn_softmax_temperature == pytest.approx(0.9)
     assert cfg.tabpfn_balance_probabilities is False
+
+
+def test_make_model_tabpfn_raises_import_error():
+    with mock.patch.dict(sys.modules, {"tabpfn": None}):
+        with pytest.raises(ImportError, match="tabpfn no está instalado"):
+            make_model(GkgChangeDetectorConfig(model_type="tabpfn"))
