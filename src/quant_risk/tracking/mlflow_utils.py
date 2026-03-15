@@ -59,10 +59,6 @@ def _warn_or_raise(cfg: MlflowConfig, exc: Exception) -> None:
     warnings.warn(f"[mlflow] {exc}")
 
 
-# ---------------------------------------------------------------------------
-# Stubs – to be implemented in subsequent tasks
-# ---------------------------------------------------------------------------
-
 def start_parent_run(
     cfg: MlflowConfig,
     run_name: str = "",
