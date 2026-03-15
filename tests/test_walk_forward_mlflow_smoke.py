@@ -179,3 +179,18 @@ def test_mlflow_cfg_disabled_does_not_call_mlflow():
         result = start_parent_run(cfg, run_name="test", tags={})
         assert result is None
         mock_mlflow.start_run.assert_not_called()
+
+
+def test_new_cli_flags_in_help():
+    import subprocess, sys
+    result = subprocess.run(
+        [sys.executable, "scripts/walk_forward_chain_tab.py", "--help"],
+        capture_output=True, text=True,
+        cwd="/home/manidmt/TFM/quant-risk-tfm"
+    )
+    help_text = result.stdout + result.stderr
+    assert "--tabpfn_n_estimators" in help_text
+    assert "--tabpfn_softmax_temperature" in help_text
+    assert "--xgb_max_depth" in help_text
+    assert "--xgb_learning_rate" in help_text
+    assert "--gkg_tabpfn_n_estimators" in help_text

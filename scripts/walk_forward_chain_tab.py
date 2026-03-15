@@ -2816,6 +2816,36 @@ def main() -> int:
     parser.add_argument("--tabpfn_device", default="auto")
     parser.add_argument("--tabpfn_n_preprocessing_jobs", type=int, default=1)
     parser.add_argument(
+        "--tabpfn_n_estimators",
+        type=int,
+        default=None,
+        help="Override TabPFN n_estimators for the main model (None = use variant config).",
+    )
+    parser.add_argument(
+        "--tabpfn_softmax_temperature",
+        type=float,
+        default=None,
+        help="Override TabPFN softmax_temperature for the main model (None = use variant config).",
+    )
+    parser.add_argument(
+        "--xgb_max_depth",
+        type=int,
+        default=None,
+        help="Override XGB max_depth for all model grid configs (None = use grid defaults).",
+    )
+    parser.add_argument(
+        "--xgb_learning_rate",
+        type=float,
+        default=None,
+        help="Override XGB learning_rate for all model grid configs (None = use grid defaults).",
+    )
+    parser.add_argument(
+        "--gkg_tabpfn_n_estimators",
+        type=int,
+        default=None,
+        help="Override TabPFN n_estimators for the GKG change detector (None = use config default).",
+    )
+    parser.add_argument(
         "--tabpfn_model_version",
         default="v2",
         choices=["v2", "v2.5"],
@@ -3037,6 +3067,17 @@ def main() -> int:
     cfg_cap = int(args.max_model_configs) if int(args.max_model_configs) > 0 else int(args.max_xgb_configs)
     if cfg_cap > 0:
         xgb_cfgs = xgb_cfgs[:cfg_cap]
+    # Apply per-flag hyperparam overrides (None = keep grid defaults)
+    if str(args.tabular_model).lower() == "tabpfn":
+        if args.tabpfn_n_estimators is not None:
+            xgb_cfgs = [{**c, "n_estimators": int(args.tabpfn_n_estimators)} for c in xgb_cfgs]
+        if args.tabpfn_softmax_temperature is not None:
+            xgb_cfgs = [{**c, "softmax_temperature": float(args.tabpfn_softmax_temperature)} for c in xgb_cfgs]
+    else:
+        if args.xgb_max_depth is not None:
+            xgb_cfgs = [{**c, "max_depth": int(args.xgb_max_depth)} for c in xgb_cfgs]
+        if args.xgb_learning_rate is not None:
+            xgb_cfgs = [{**c, "learning_rate": float(args.xgb_learning_rate)} for c in xgb_cfgs]
     if int(args.max_experiments) > 0:
         # Backward compatibility: cap structural configs first.
         structural_cfgs = structural_cfgs[: int(args.max_experiments)]
