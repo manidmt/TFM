@@ -39,7 +39,7 @@ _GKG_ROLL_RE = re.compile(
 
 @dataclass(frozen=True)
 class GkgChangeDetectorConfig:
-    model_type: str = "logit"  # logit | xgb | tabpfn(placeholder)
+    model_type: str = "logit"  # logit | xgb | tabpfn
     calibration_method: str = "none"  # none | platt | isotonic
     random_state: int = 42
     seed: int = 42
@@ -52,6 +52,10 @@ class GkgChangeDetectorConfig:
     xgb_min_child_weight: float = 1.0
     xgb_reg_lambda: float = 1.0
     xgb_n_jobs: int = 1
+    # TabPFN params (used only when model_type=tabpfn)
+    tabpfn_n_estimators: int = 8
+    tabpfn_softmax_temperature: float = 0.9
+    tabpfn_balance_probabilities: bool = False
 
 
 @dataclass(frozen=True)
