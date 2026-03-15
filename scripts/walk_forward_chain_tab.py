@@ -49,6 +49,8 @@ from quant_risk.models.tabular.xgb import (
     make_model as make_xgb_model,
     predict_proba as predict_proba_xgb,
 )
+from quant_risk.tracking import mlflow_utils as tracking
+from quant_risk.tracking.mlflow_utils import MlflowConfig
 
 DEFAULT_CHAIN_VARIANTS_CONFIG = "src/quant_risk/models/econometric/chain_variants.yaml"
 DEFAULT_TABPFN_VARIANTS_CONFIG = "src/quant_risk/models/tabular/tabpfn_variants.yaml"
@@ -2779,7 +2781,53 @@ def main() -> int:
         choices=["promising", "full"],
         help="Hyperparameter grid profile: compact promising set or broader full set.",
     )
+    # --- MLflow tracking ---
+    parser.add_argument(
+        "--use_mlflow",
+        action="store_true",
+        help="Enable MLflow experiment tracking.",
+    )
+    parser.add_argument(
+        "--mlflow_tracking_uri",
+        default="file:./mlruns",
+        help="MLflow tracking store URI.",
+    )
+    parser.add_argument(
+        "--mlflow_experiment",
+        default="walk_forward_chain_tab",
+        help="MLflow experiment name.",
+    )
+    parser.add_argument(
+        "--mlflow_parent_run_name",
+        default="",
+        help="Override parent run name (auto-generated timestamp if empty).",
+    )
+    parser.add_argument(
+        "--mlflow_strict",
+        action="store_true",
+        help="Abort the run if any MLflow tracking call fails.",
+    )
+    parser.add_argument(
+        "--mlflow_tags_json",
+        default="",
+        help="Extra MLflow tags as a JSON string, e.g. '{\"env\": \"dev\"}'.",
+    )
     args = parser.parse_args()
+    # --- Build MLflow config ---
+    _mlflow_extra_tags: dict[str, str] = {}
+    if args.mlflow_tags_json:
+        try:
+            _mlflow_extra_tags = json.loads(args.mlflow_tags_json)
+        except json.JSONDecodeError as _e:
+            raise SystemExit(f"Invalid --mlflow_tags_json: {_e}") from _e
+    mlflow_cfg = MlflowConfig(
+        enabled=bool(args.use_mlflow),
+        tracking_uri=str(args.mlflow_tracking_uri),
+        experiment_name=str(args.mlflow_experiment),
+        parent_run_name=str(args.mlflow_parent_run_name),
+        strict=bool(args.mlflow_strict),
+        extra_tags=_mlflow_extra_tags,
+    )
     blend_alphas = _parse_blend_alphas(args.blend_alphas)
     blend_conf_betas = _parse_blend_conf_betas(args.blend_conf_betas)
     gate_thresholds = _parse_gate_thresholds(args.gate_thresholds)
