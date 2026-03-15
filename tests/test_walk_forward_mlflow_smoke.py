@@ -194,3 +194,15 @@ def test_new_cli_flags_in_help():
     assert "--xgb_max_depth" in help_text
     assert "--xgb_learning_rate" in help_text
     assert "--gkg_tabpfn_n_estimators" in help_text
+
+
+def test_gkg_tabpfn_n_estimators_wired():
+    """_fit_eval_gkg_change_detector accepts tabpfn_n_estimators kwarg."""
+    import inspect, importlib.util, sys as _sys
+    spec_mod = importlib.util.spec_from_file_location("wf_task3", "scripts/walk_forward_chain_tab.py")
+    mod = importlib.util.module_from_spec(spec_mod)
+    _sys.modules["wf_task3"] = mod
+    spec_mod.loader.exec_module(mod)
+
+    sig = inspect.signature(mod._fit_eval_gkg_change_detector)
+    assert "tabpfn_n_estimators" in sig.parameters

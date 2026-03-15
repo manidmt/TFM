@@ -1094,6 +1094,7 @@ def _fit_eval_gkg_change_detector(
     calibration_method: str,
     context_cols: tuple[str, ...],
     xgb_n_jobs: int,
+    tabpfn_n_estimators: int | None = None,
 ) -> dict[str, Any]:
     """@brief Train/evaluate a GKG-only binary change detector with calibrated probabilities."""
     y_train_change = (
@@ -1147,12 +1148,18 @@ def _fit_eval_gkg_change_detector(
             "gkg_change_train_change_rate": float(np.mean(y_train_change)),
         }
 
+    _tabpfn_override = (
+        {"tabpfn_n_estimators": int(tabpfn_n_estimators)}
+        if tabpfn_n_estimators is not None
+        else {}
+    )
     cfg = GkgChangeDetectorConfig(
         model_type=str(model_type).lower(),
         calibration_method=str(calibration_method).lower(),
         random_state=42,
         seed=42,
         xgb_n_jobs=int(xgb_n_jobs),
+        **_tabpfn_override,
     )
     artifacts = fit_gkg_change_detector(
         cfg,
@@ -2064,6 +2071,7 @@ def _fit_eval_tabular(
             calibration_method=str(gkg_change_calibration_method).lower(),
             context_cols=tuple(gkg_change_context_cols),
             xgb_n_jobs=int(xgb_n_jobs),
+            tabpfn_n_estimators=args.gkg_tabpfn_n_estimators,
         )
 
     p_change_valid = (
@@ -2441,6 +2449,7 @@ def _official_test_compare(
             calibration_method=str(gkg_change_calibration_method).lower(),
             context_cols=tuple(gkg_change_context_cols),
             xgb_n_jobs=int(xgb_n_jobs),
+            tabpfn_n_estimators=args.gkg_tabpfn_n_estimators,
         )
 
     p_change_test = (
