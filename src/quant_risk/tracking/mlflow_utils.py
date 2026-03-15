@@ -92,7 +92,8 @@ def start_child_run(
     if not is_enabled(cfg):
         return None
     try:
-        return mlflow.start_run(run_name=run_name, nested=True, tags=tags or {})
+        merged = {**(tags or {}), **cfg.extra_tags}
+        return mlflow.start_run(run_name=run_name, nested=True, tags=merged)
     except Exception as exc:
         _warn_or_raise(cfg, exc)
         return None

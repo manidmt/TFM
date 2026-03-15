@@ -273,3 +273,20 @@ def test_build_run_context_contains_expected_keys():
     assert "configs" in result
     assert result["git_sha"] == "abc1234"
     assert result["args"]["horizon"] == "5"
+
+
+def test_start_child_run_propagates_extra_tags():
+    cfg = MlflowConfig(enabled=True, extra_tags={"sweep_trial": "7", "optuna_study": "sweep_GSPC_20260315"})
+    explicit_tags = {"asset": "^GSPC"}
+
+    with patch("quant_risk.tracking.mlflow_utils._MLFLOW_AVAILABLE", True):
+        with patch("quant_risk.tracking.mlflow_utils.mlflow") as mock_mlflow:
+            mock_mlflow.start_run.return_value = MagicMock()
+            from quant_risk.tracking.mlflow_utils import start_child_run
+            start_child_run(cfg, run_name="asset=^GSPC", tags=explicit_tags)
+
+    call_kwargs = mock_mlflow.start_run.call_args[1]
+    merged = call_kwargs["tags"]
+    assert merged["asset"] == "^GSPC"
+    assert merged["sweep_trial"] == "7"
+    assert merged["optuna_study"] == "sweep_GSPC_20260315"
