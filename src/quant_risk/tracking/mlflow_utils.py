@@ -103,7 +103,7 @@ def end_run_safe(cfg: MlflowConfig, status: str = "FINISHED") -> None:
     if not is_enabled(cfg):
         return
     try:
-        mlflow.end_run()
+        mlflow.end_run(status=status)
     except Exception as exc:
         _warn_or_raise(cfg, exc)
 
@@ -149,7 +149,7 @@ def log_artifact_safe(cfg: MlflowConfig, path) -> None:
         if p.exists():
             mlflow.log_artifact(str(p))
         else:
-            warnings.warn(f"[mlflow] artifact not found: {p}")
+            _warn_or_raise(cfg, FileNotFoundError(f"[mlflow] artifact not found: {p}"))
     except Exception as exc:
         _warn_or_raise(cfg, exc)
 
