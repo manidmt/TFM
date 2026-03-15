@@ -2607,6 +2607,144 @@ def _official_test_compare(
     }
 
 
+def _build_mlflow_parent_tags(args: Any, git_sha: str, sources_cfg: dict) -> dict[str, str]:
+    """Build tags for the parent MLflow run from CLI args and loaded configs."""
+    gkg_cfg = sources_cfg.get("gkg", {})
+    return {
+        "script": "walk_forward_chain_tab.py",
+        "component": "walk_forward",
+        "git_sha": git_sha,
+        "horizon": str(args.horizon),
+        "tabular_model": str(args.tabular_model),
+        "news_profile": str(gkg_cfg.get("profile_name", "")),
+        "news_profile_version": str(gkg_cfg.get("profile_version", "")),
+    }
+
+
+def _build_mlflow_child_tags(
+    asset_name: str,
+    group_tickers: tuple[str, ...],
+    args: Any,
+) -> dict[str, str]:
+    """Build tags for one child (asset) MLflow run."""
+    return {
+        "asset": str(asset_name),
+        "tickers": "|".join(group_tickers),
+        "horizon": str(args.horizon),
+        "tabular_model": str(args.tabular_model),
+        "use_gkg_change_detector": str(bool(args.use_gkg_change_detector)),
+        "use_gkg_change_gate": str(bool(args.use_gkg_change_gate)),
+        "use_gkg_change_alpha": str(bool(args.use_gkg_change_alpha)),
+    }
+
+
+def _build_mlflow_child_params(args: Any, sources_cfg: dict, features_cfg: dict) -> dict[str, Any]:
+    """Build the full params dict logged to a child MLflow run.
+
+    Covers runner/model params, GKG sidecar params, and data/feature profile params.
+    """
+    gkg_cfg = sources_cfg.get("gkg", {})
+    news_cfg = features_cfg.get("news_features", {})
+    return {
+        # Runner / model params
+        "horizon": args.horizon,
+        "tabular_model": args.tabular_model,
+        "per_ticker": args.per_ticker,
+        "grid_profile": args.grid_profile,
+        "min_train_end": args.min_train_end,
+        "max_valid_end": args.max_valid_end,
+        "valid_months": args.valid_months,
+        "step_months": args.step_months,
+        "max_struct_configs": args.max_struct_configs,
+        "max_model_configs": args.max_model_configs,
+        "min_folds_ok": args.min_folds_ok,
+        "min_positive_rate": args.min_positive_rate,
+        "min_non_transition_delta": args.min_non_transition_delta,
+        "min_high_vol_recall_delta": args.min_high_vol_recall_delta,
+        "stability_lambda": args.stability_lambda,
+        "positive_rate_lambda": args.positive_rate_lambda,
+        "non_transition_penalty_lambda": args.non_transition_penalty_lambda,
+        "transition_bonus_lambda": args.transition_bonus_lambda,
+        "prune_after_folds": args.prune_after_folds,
+        "prune_delta_threshold": args.prune_delta_threshold,
+        "use_blend": args.use_blend,
+        "blend_alphas": args.blend_alphas,
+        "blend_conf_betas": args.blend_conf_betas,
+        "class_threshold_grid": args.class_threshold_grid,
+        "gate_thresholds": args.gate_thresholds,
+        "calibration_method": args.calibration_method,
+        # GKG sidecar params
+        "use_gkg_change_detector": args.use_gkg_change_detector,
+        "use_gkg_change_gate": args.use_gkg_change_gate,
+        "use_gkg_change_alpha": args.use_gkg_change_alpha,
+        "gkg_change_model": args.gkg_change_model,
+        "gkg_change_context_cols": args.gkg_change_context_cols,
+        "gkg_change_calibration_method": args.gkg_change_calibration_method,
+        "gkg_change_gate_thresholds": args.gkg_change_gate_thresholds,
+        "gkg_change_alpha_weights": args.gkg_change_alpha_weights,
+        "gkg_change_alpha_weights_by_asset": args.gkg_change_alpha_weights_by_asset,
+        "gkg_change_blend_hook_weight": args.gkg_change_blend_hook_weight,
+        # Data / feature profile params
+        "gkg_profile_name": gkg_cfg.get("profile_name", ""),
+        "gkg_profile_version": gkg_cfg.get("profile_version", ""),
+        "gkg_profile_mode": gkg_cfg.get("profile_mode", ""),
+        "gkg_start": gkg_cfg.get("start", ""),
+        "gkg_store_raw": gkg_cfg.get("store_raw", False),
+        "gkg_sample_interval_minutes": gkg_cfg.get("sample_interval_minutes", ""),
+        "gkg_max_files_per_day": gkg_cfg.get("max_files_per_day", ""),
+        "gkg_publication_lag_bdays": gkg_cfg.get("publication_lag_bdays", ""),
+        "news_feature_profile_name": news_cfg.get("profile_name", ""),
+        "news_feature_profile_version": news_cfg.get("profile_version", ""),
+        "news_source_table": news_cfg.get("source_table", ""),
+        "news_windows": str(news_cfg.get("windows", [])),
+        "news_compact_mode": news_cfg.get("compact_mode", False),
+        "news_include_interactions": news_cfg.get("include_interactions", False),
+    }
+
+
+def _build_mlflow_child_metrics(best: dict[str, Any], final_cmp: dict[str, Any]) -> dict[str, Any]:
+    """Extract the child-run metrics from the selected best row and test comparison."""
+    metrics: dict[str, Any] = {
+        # Walk-forward selection metrics
+        "robust_score": best.get("robust_score"),
+        "n_folds_ok": best.get("n_folds_ok"),
+        "mean_delta_macro_vs_persistence": best.get("mean_delta_macro_vs_persistence"),
+        "mean_delta_transition_macro_f1_vs_persistence": best.get(
+            "mean_delta_transition_macro_f1_vs_persistence"
+        ),
+        "mean_delta_non_transition_macro_f1_vs_persistence": best.get(
+            "mean_delta_non_transition_macro_f1_vs_persistence"
+        ),
+        "mean_delta_high_vol_recall_vs_persistence": best.get(
+            "mean_delta_high_vol_recall_vs_persistence"
+        ),
+        "oof_delta_macro_vs_persistence": best.get("oof_delta_macro_vs_persistence"),
+        "selected_struct_id": best.get("struct_id"),
+        "selected_model_id": best.get("xgb_id"),
+        "selected_blend_alpha": best.get("oof_selected_alpha"),
+        "selected_blend_beta": best.get("oof_selected_beta"),
+        "selected_gate_threshold": best.get("oof_selected_gate_threshold"),
+        "selected_change_gate_threshold": best.get("oof_selected_change_gate_threshold"),
+        "selected_change_alpha_weight": best.get("oof_selected_change_alpha_weight"),
+    }
+    # Test-set metrics from final comparison
+    for key in (
+        "delta_test_macro_f1_vs_persistence",
+        "delta_transition_macro_f1_vs_persistence_test",
+        "delta_non_transition_macro_f1_vs_persistence_test",
+        "delta_test_high_vol_recall_vs_persistence",
+        "gkg_change_macro_f1_test",
+        "gkg_change_auc_test",
+        "gkg_change_brier_test",
+        "change_gating_rate_test",
+        "mean_p_change_test",
+        "mean_effective_alpha_test",
+    ):
+        if key in final_cmp:
+            metrics[key] = final_cmp[key]
+    return metrics
+
+
 def main() -> int:
     """@brief CLI entrypoint for walk-forward selection and final evaluation.
 
@@ -2915,686 +3053,721 @@ def main() -> int:
     global_best_rows: list[dict[str, Any]] = []
     final_compare_rows: list[dict[str, Any]] = []
 
-    for asset_name, group_tickers in groups:
-        asset_gkg_change_alpha_weights = _resolve_asset_specific_grid(
-            default_grid=gkg_change_alpha_weights,
-            asset_overrides=gkg_change_alpha_weights_by_asset,
-            asset_name=str(asset_name),
-            tickers=tuple(group_tickers),
-        )
-        folds = build_folds(
-            min_train_end=args.min_train_end,
-            max_valid_end=args.max_valid_end,
-            valid_months=int(args.valid_months),
-            step_months=int(args.step_months),
-        )
-        if not folds:
-            raise SystemExit(f"No folds generated for asset={asset_name}. Check date range arguments.")
+    # --- MLflow: detect git SHA, build parent tags, open parent run ---
+    _git_sha = tracking.get_git_sha()
+    _parent_tags = _build_mlflow_parent_tags(args, _git_sha, sources_cfg)
+    _auto_run_name = (
+        args.mlflow_parent_run_name
+        or f"wf_chain_tab__h{args.horizon}__{args.tabular_model}__{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}"
+    )
+    _mlflow_parent = tracking.start_parent_run(mlflow_cfg, run_name=_auto_run_name, tags=_parent_tags)
+    # Log parent-level params (shared across all assets)
+    _child_params = _build_mlflow_child_params(args, sources_cfg, features_cfg)
+    tracking.log_params_safe(mlflow_cfg, _child_params)
+    # Log config file snapshots as artifacts
+    tracking.log_artifact_safe(mlflow_cfg, args.config_features)
+    tracking.log_artifact_safe(mlflow_cfg, args.config_sources)
+    # Log CLI args snapshot and run context JSON
+    tracking.log_dict_artifact(mlflow_cfg, {k: str(v) for k, v in vars(args).items()}, "cli_args.json")
+    _run_ctx = tracking.build_run_context(args, {"features": features_cfg, "sources": sources_cfg}, _git_sha)
+    tracking.log_dict_artifact(mlflow_cfg, _run_ctx, "run_context.json")
 
-        outdir = Path(args.outdir) / f"h{args.horizon}" / f"asset_{asset_name}"
-        cache_dir = outdir / "cache"
-        outdir.mkdir(parents=True, exist_ok=True)
+    try:
+        for asset_name, group_tickers in groups:
+            asset_gkg_change_alpha_weights = _resolve_asset_specific_grid(
+                default_grid=gkg_change_alpha_weights,
+                asset_overrides=gkg_change_alpha_weights_by_asset,
+                asset_name=str(asset_name),
+                tickers=tuple(group_tickers),
+            )
+            folds = build_folds(
+                min_train_end=args.min_train_end,
+                max_valid_end=args.max_valid_end,
+                valid_months=int(args.valid_months),
+                step_months=int(args.step_months),
+            )
+            if not folds:
+                raise SystemExit(f"No folds generated for asset={asset_name}. Check date range arguments.")
 
-        fold_rows: list[dict[str, Any]] = []
-        summary_rows: list[dict[str, Any]] = []
+            outdir = Path(args.outdir) / f"h{args.horizon}" / f"asset_{asset_name}"
+            cache_dir = outdir / "cache"
+            outdir.mkdir(parents=True, exist_ok=True)
 
-        for s_idx, s_cfg in enumerate(structural_cfgs):
-            combo_metrics: dict[int, list[dict[str, Any]]] = {i: [] for i in range(len(xgb_cfgs))}
-            active_xgb = set(range(len(xgb_cfgs)))
-            pruned_at: dict[int, int | None] = {i: None for i in range(len(xgb_cfgs))}
+            fold_rows: list[dict[str, Any]] = []
+            summary_rows: list[dict[str, Any]] = []
 
-            for fold_idx, (train_end, valid_end) in enumerate(folds):
-                fold_data = _prepare_fold_data(
-                    db_path=db_path,
-                    tickers=group_tickers,
-                    horizon=int(args.horizon),
-                    regime_bins=regime_bins,
-                    train_end=train_end,
-                    valid_end=valid_end,
-                    struct_cfg=s_cfg,
-                    cache_dir=cache_dir,
-                    use_cache=not bool(args.disable_cache),
-                )
+            for s_idx, s_cfg in enumerate(structural_cfgs):
+                combo_metrics: dict[int, list[dict[str, Any]]] = {i: [] for i in range(len(xgb_cfgs))}
+                active_xgb = set(range(len(xgb_cfgs)))
+                pruned_at: dict[int, int | None] = {i: None for i in range(len(xgb_cfgs))}
 
-                for x_idx in sorted(active_xgb):
-                    try:
-                        res = _fit_eval_tabular(
-                            tabular_model=str(args.tabular_model),
-                            model_cfg=xgb_cfgs[x_idx],
-                            fold_data=fold_data,
-                            xgb_n_jobs=int(args.xgb_n_jobs),
-                            use_blend=bool(args.use_blend),
-                            blend_alphas=blend_alphas,
-                            blend_conf_betas=blend_conf_betas,
-                            calibration_method=str(args.calibration_method),
-                            class_threshold_grid=class_threshold_grid,
-                            gate_thresholds=gate_thresholds,
-                            min_non_transition_delta=float(args.min_non_transition_delta),
-                            use_gkg_change_detector=bool(args.use_gkg_change_detector),
-                            use_gkg_change_gate=bool(args.use_gkg_change_gate),
-                            use_gkg_change_alpha=bool(args.use_gkg_change_alpha),
-                            gkg_change_model=str(args.gkg_change_model),
-                            gkg_change_context_cols=gkg_change_context_cols,
-                            gkg_change_calibration_method=str(
-                                args.gkg_change_calibration_method
+                for fold_idx, (train_end, valid_end) in enumerate(folds):
+                    fold_data = _prepare_fold_data(
+                        db_path=db_path,
+                        tickers=group_tickers,
+                        horizon=int(args.horizon),
+                        regime_bins=regime_bins,
+                        train_end=train_end,
+                        valid_end=valid_end,
+                        struct_cfg=s_cfg,
+                        cache_dir=cache_dir,
+                        use_cache=not bool(args.disable_cache),
+                    )
+
+                    for x_idx in sorted(active_xgb):
+                        try:
+                            res = _fit_eval_tabular(
+                                tabular_model=str(args.tabular_model),
+                                model_cfg=xgb_cfgs[x_idx],
+                                fold_data=fold_data,
+                                xgb_n_jobs=int(args.xgb_n_jobs),
+                                use_blend=bool(args.use_blend),
+                                blend_alphas=blend_alphas,
+                                blend_conf_betas=blend_conf_betas,
+                                calibration_method=str(args.calibration_method),
+                                class_threshold_grid=class_threshold_grid,
+                                gate_thresholds=gate_thresholds,
+                                min_non_transition_delta=float(args.min_non_transition_delta),
+                                use_gkg_change_detector=bool(args.use_gkg_change_detector),
+                                use_gkg_change_gate=bool(args.use_gkg_change_gate),
+                                use_gkg_change_alpha=bool(args.use_gkg_change_alpha),
+                                gkg_change_model=str(args.gkg_change_model),
+                                gkg_change_context_cols=gkg_change_context_cols,
+                                gkg_change_calibration_method=str(
+                                    args.gkg_change_calibration_method
+                                ),
+                                gkg_change_gate_thresholds=gkg_change_gate_thresholds,
+                                gkg_change_alpha_weights=asset_gkg_change_alpha_weights,
+                                gkg_change_blend_hook_weight=float(
+                                    args.gkg_change_blend_hook_weight
+                                ),
+                            )
+                            combo_metrics[x_idx].append(res)
+                            res_row = {
+                                k: v
+                                for k, v in res.items()
+                                if k
+                                not in {
+                                    "proba_valid",
+                                    "y_valid",
+                                    "y_valid_regime",
+                                    "regime_prev_valid",
+                                    "persist_valid_pred",
+                                    "persist_valid_regime_pred",
+                                    "gkg_change_p_change_eval",
+                                    "gkg_change_y_eval",
+                                    "gkg_change_pred_eval",
+                                }
+                            }
+                            fold_rows.append(
+                                {
+                                    "asset": asset_name,
+                                    "tickers": "|".join(group_tickers),
+                                    "tabular_model": str(args.tabular_model),
+                                    "struct_id": s_idx,
+                                    "model_id": x_idx,
+                                    "xgb_id": x_idx,
+                                    "fold_id": fold_idx,
+                                    "train_end": train_end,
+                                    "valid_end": valid_end,
+                                    **s_cfg,
+                                    **xgb_cfgs[x_idx],
+                                    **res_row,
+                                }
+                            )
+                        except Exception as e:
+                            fold_rows.append(
+                                {
+                                    "asset": asset_name,
+                                    "tickers": "|".join(group_tickers),
+                                    "tabular_model": str(args.tabular_model),
+                                    "struct_id": s_idx,
+                                    "model_id": x_idx,
+                                    "xgb_id": x_idx,
+                                    "fold_id": fold_idx,
+                                    "train_end": train_end,
+                                    "valid_end": valid_end,
+                                    **s_cfg,
+                                    **xgb_cfgs[x_idx],
+                                    "error": repr(e),
+                                }
+                            )
+
+                    if int(args.prune_after_folds) > 0:
+                        for x_idx in list(active_xgb):
+                            rows = combo_metrics[x_idx]
+                            if len(rows) < int(args.prune_after_folds):
+                                continue
+                            mean_delta = float(np.mean([r["delta_macro_f1_vs_persistence"] for r in rows]))
+                            mean_non_transition_delta = float(
+                                np.mean(
+                                    [
+                                        r["delta_non_transition_macro_f1_vs_persistence"]
+                                        for r in rows
+                                    ]
+                                )
+                            )
+                            mean_high_vol_recall_delta = float(
+                                np.mean([r["delta_high_vol_recall_vs_persistence"] for r in rows])
+                            )
+                            if (
+                                mean_delta < float(args.prune_delta_threshold)
+                                or mean_non_transition_delta < float(args.min_non_transition_delta)
+                                or mean_high_vol_recall_delta < float(args.min_high_vol_recall_delta)
+                            ):
+                                active_xgb.remove(x_idx)
+                                pruned_at[x_idx] = fold_idx
+
+                    if not active_xgb:
+                        break
+
+                for x_idx, rows in combo_metrics.items():
+                    if not rows:
+                        continue
+                    alpha_series_fold = np.array([r["selected_alpha"] for r in rows], dtype=float)
+                    beta_series_fold = np.array([r["selected_beta"] for r in rows], dtype=float)
+                    eff_alpha_series_fold = np.array([r["mean_effective_alpha"] for r in rows], dtype=float)
+
+                    oof_proba = np.vstack([np.asarray(r["proba_valid"], dtype=float) for r in rows])
+                    oof_y_target = np.concatenate(
+                        [np.asarray(r["y_valid"], dtype=int) for r in rows]
+                    ).astype(int)
+                    oof_y_regime = np.concatenate(
+                        [np.asarray(r["y_valid_regime"], dtype=int) for r in rows]
+                    ).astype(int)
+                    oof_persist_target = np.concatenate(
+                        [np.asarray(r["persist_valid_pred"], dtype=int) for r in rows]
+                    ).astype(int)
+                    oof_persist_regime = np.concatenate(
+                        [np.asarray(r["persist_valid_regime_pred"], dtype=int) for r in rows]
+                    ).astype(int)
+                    oof_p_change = (
+                        np.concatenate(
+                            [np.asarray(r["gkg_change_p_change_eval"], dtype=float) for r in rows]
+                        ).astype(float)
+                        if bool(args.use_gkg_change_gate or args.use_gkg_change_alpha)
+                        else None
+                    )
+
+                    m_oof_persist_target = compute_metrics(oof_y_target, oof_persist_target)
+                    oof_persist_target_metrics = {
+                        "acc": float(m_oof_persist_target.accuracy),
+                        "macro_f1": float(m_oof_persist_target.macro_f1),
+                        "weighted_f1": float(m_oof_persist_target.weighted_f1),
+                        "macro_recall": float(m_oof_persist_target.macro_recall),
+                        "high_vol_recall": _high_vol_recall(m_oof_persist_target),
+                    }
+                    m_oof_persist_regime = compute_metrics(oof_y_regime, oof_persist_regime)
+                    oof_persist_regime_metrics = {
+                        "acc": float(m_oof_persist_regime.accuracy),
+                        "macro_f1": float(m_oof_persist_regime.macro_f1),
+                        "weighted_f1": float(m_oof_persist_regime.weighted_f1),
+                        "macro_recall": float(m_oof_persist_regime.macro_recall),
+                        "high_vol_recall": _high_vol_recall(m_oof_persist_regime),
+                    }
+
+                    oof_n_classes = int(np.asarray(oof_proba).shape[1])
+                    oof_selected_cfg, oof_best_m = _pick_best_blend_strategy(
+                        proba_chain=oof_proba,
+                        y_true_target=oof_y_target,
+                        y_persist_target=oof_persist_target,
+                        y_true_regime=oof_y_regime,
+                        blend_alphas=blend_alphas if bool(args.use_blend) else (1.0,),
+                        blend_conf_betas=blend_conf_betas if bool(args.use_blend) else (0.0,),
+                        class_threshold_grid=(
+                            class_threshold_grid
+                            if bool(args.use_blend)
+                            else (tuple(np.ones(oof_n_classes, dtype=float).tolist()),)
+                        ),
+                        gate_thresholds=gate_thresholds if bool(args.use_blend) else (0.0,),
+                        persist_target_metrics=oof_persist_target_metrics,
+                        persist_regime_metrics=oof_persist_regime_metrics,
+                        p_change=oof_p_change,
+                        change_gate_thresholds=(
+                            gkg_change_gate_thresholds if bool(args.use_gkg_change_gate) else (0.0,)
+                        ),
+                        change_alpha_weights=(
+                            asset_gkg_change_alpha_weights
+                            if bool(args.use_gkg_change_alpha)
+                            else (0.0,)
+                        ),
+                        min_non_transition_delta=float(args.min_non_transition_delta),
+                    )
+                    oof_selected_alpha = float(oof_selected_cfg["selected_alpha"])
+                    oof_selected_beta = float(oof_selected_cfg["selected_beta"])
+                    oof_selected_class_thresholds = _parse_class_thresholds(
+                        oof_selected_cfg["selected_class_thresholds"],
+                        n_classes=oof_n_classes,
+                    )
+                    oof_selected_gate_threshold = float(
+                        np.clip(oof_selected_cfg["selected_gate_threshold"], 0.0, 1.0)
+                    )
+                    oof_selected_change_gate_threshold = float(
+                        np.clip(oof_selected_cfg.get("selected_change_gate_threshold", 0.0), 0.0, 1.0)
+                    )
+                    oof_selected_change_alpha_weight = float(
+                        np.clip(oof_selected_cfg.get("selected_change_alpha_weight", 0.0), 0.0, 1.0)
+                    )
+
+                    fold_eval_metrics = []
+                    for r in rows:
+                        fold_persist = {
+                            "acc": float(r["persist_valid_acc"]),
+                            "macro_f1": float(r["persist_valid_macro_f1"]),
+                            "weighted_f1": float(r["persist_valid_weighted_f1"]),
+                            "macro_recall": float(r["persist_valid_macro_recall"]),
+                            "high_vol_recall": float(r["persist_valid_high_vol_recall"]),
+                        }
+                        fold_persist_target = {
+                            "acc": float(r["persist_valid_target_acc"]),
+                            "macro_f1": float(r["persist_valid_target_macro_f1"]),
+                            "weighted_f1": float(r["persist_valid_target_weighted_f1"]),
+                            "macro_recall": float(r["persist_valid_target_macro_recall"]),
+                            "high_vol_recall": float(r["persist_valid_target_high_vol_recall"]),
+                        }
+                        fm = _blend_metrics(
+                            proba_chain=np.asarray(r["proba_valid"], dtype=float),
+                            y_true_target=np.asarray(r["y_valid"], dtype=int),
+                            y_persist_target=np.asarray(r["persist_valid_pred"], dtype=int),
+                            y_true_regime=np.asarray(r["y_valid_regime"], dtype=int),
+                            persist_target_metrics=fold_persist_target,
+                            persist_regime_metrics=fold_persist,
+                            alpha=float(oof_selected_alpha),
+                            beta=float(oof_selected_beta),
+                            class_thresholds=oof_selected_class_thresholds,
+                            gate_threshold=oof_selected_gate_threshold,
+                            p_change=(
+                                np.asarray(r["gkg_change_p_change_eval"], dtype=float)
+                                if bool(args.use_gkg_change_gate or args.use_gkg_change_alpha)
+                                else None
                             ),
-                            gkg_change_gate_thresholds=gkg_change_gate_thresholds,
-                            gkg_change_alpha_weights=asset_gkg_change_alpha_weights,
-                            gkg_change_blend_hook_weight=float(
+                            change_gate_threshold=float(oof_selected_change_gate_threshold),
+                            change_alpha_weight=float(oof_selected_change_alpha_weight),
+                        )
+                        fold_eval_metrics.append(fm)
+
+                    acc_series = np.array([m["acc"] for m in fold_eval_metrics], dtype=float)
+                    macro_series = np.array([m["macro_f1"] for m in fold_eval_metrics], dtype=float)
+                    weighted_series = np.array([m["weighted_f1"] for m in fold_eval_metrics], dtype=float)
+                    macro_recall_series = np.array([m["macro_recall"] for m in fold_eval_metrics], dtype=float)
+                    high_vol_recall_series = np.array(
+                        [m["high_vol_recall"] for m in fold_eval_metrics], dtype=float
+                    )
+                    delta_series = np.array(
+                        [m["delta_macro_f1_vs_persistence"] for m in fold_eval_metrics], dtype=float
+                    )
+                    delta_weighted_series = np.array(
+                        [m["delta_weighted_f1_vs_persistence"] for m in fold_eval_metrics], dtype=float
+                    )
+                    delta_macro_recall_series = np.array(
+                        [m["delta_macro_recall_vs_persistence"] for m in fold_eval_metrics], dtype=float
+                    )
+                    delta_high_vol_recall_series = np.array(
+                        [m["delta_high_vol_recall_vs_persistence"] for m in fold_eval_metrics], dtype=float
+                    )
+                    delta_transition_macro_f1_series = np.array(
+                        [m["delta_transition_macro_f1_vs_persistence"] for m in fold_eval_metrics],
+                        dtype=float,
+                    )
+                    delta_non_transition_macro_f1_series = np.array(
+                        [m["delta_non_transition_macro_f1_vs_persistence"] for m in fold_eval_metrics],
+                        dtype=float,
+                    )
+                    gating_rate_series = np.array([m["gating_rate"] for m in fold_eval_metrics], dtype=float)
+                    confidence_gating_rate_series = np.array(
+                        [m["confidence_gating_rate"] for m in fold_eval_metrics], dtype=float
+                    )
+                    change_gating_rate_series = np.array(
+                        [m["change_gating_rate"] for m in fold_eval_metrics], dtype=float
+                    )
+                    mean_p_change_series = np.array(
+                        [m["mean_p_change"] for m in fold_eval_metrics], dtype=float
+                    )
+                    confidence_series = np.array([m["mean_confidence"] for m in fold_eval_metrics], dtype=float)
+                    change_alpha_multiplier_series = np.array(
+                        [m["mean_change_alpha_multiplier"] for m in fold_eval_metrics], dtype=float
+                    )
+                    gkg_change_enabled_series = np.array(
+                        [float(bool(r.get("gkg_change_enabled", False))) for r in rows], dtype=float
+                    )
+                    gkg_change_macro_f1_series = np.array(
+                        [float(r.get("gkg_change_eval_macro_f1", np.nan)) for r in rows], dtype=float
+                    )
+                    gkg_change_auc_series = np.array(
+                        [float(r.get("gkg_change_eval_auc", np.nan)) for r in rows], dtype=float
+                    )
+                    gkg_change_brier_series = np.array(
+                        [float(r.get("gkg_change_eval_brier", np.nan)) for r in rows], dtype=float
+                    )
+                    gkg_change_pchange_mean_series = np.array(
+                        [float(r.get("gkg_change_eval_p_change_mean", np.nan)) for r in rows],
+                        dtype=float,
+                    )
+
+                    positive_rate = float(np.mean(delta_series > 0.0))
+                    stability_penalty = float(args.stability_lambda) * float(np.std(delta_series))
+                    positive_gap = max(0.0, float(args.min_positive_rate) - positive_rate)
+                    positive_penalty = float(args.positive_rate_lambda) * positive_gap
+                    mean_non_transition_delta = float(
+                        np.nan_to_num(_safe_mean(delta_non_transition_macro_f1_series), nan=-1.0)
+                    )
+                    non_transition_gap = max(
+                        0.0, float(args.min_non_transition_delta) - mean_non_transition_delta
+                    )
+                    non_transition_penalty = (
+                        float(args.non_transition_penalty_lambda) * non_transition_gap
+                    )
+                    transition_bonus = float(args.transition_bonus_lambda) * float(
+                        np.nan_to_num(_safe_mean(delta_transition_macro_f1_series), nan=0.0)
+                    )
+                    robust_score = (
+                        float(np.mean(delta_series))
+                        - stability_penalty
+                        - positive_penalty
+                        - non_transition_penalty
+                        + transition_bonus
+                    )
+
+                    gate_series_fold = np.array(
+                        [float(r.get("selected_gate_threshold", 0.0)) for r in rows], dtype=float
+                    )
+                    change_gate_series_fold = np.array(
+                        [float(r.get("selected_change_gate_threshold", 0.0)) for r in rows],
+                        dtype=float,
+                    )
+                    change_alpha_weight_series_fold = np.array(
+                        [float(r.get("selected_change_alpha_weight", 0.0)) for r in rows],
+                        dtype=float,
+                    )
+                    class_threshold_tokens = [
+                        str(r.get("selected_class_thresholds", _format_class_thresholds([1.0, 1.0, 1.0])))
+                        for r in rows
+                    ]
+                    class_threshold_mode = Counter(class_threshold_tokens).most_common(1)[0][0]
+                    cal_method_tokens = [str(r.get("calibration_method", "none")) for r in rows]
+                    calibration_method_mode = Counter(cal_method_tokens).most_common(1)[0][0]
+
+                    summary_rows.append(
+                        {
+                            "asset": asset_name,
+                            "tickers": "|".join(group_tickers),
+                            "tabular_model": str(args.tabular_model),
+                            "struct_id": s_idx,
+                            "model_id": x_idx,
+                            "xgb_id": x_idx,
+                            **s_cfg,
+                            **xgb_cfgs[x_idx],
+                            "n_folds_ok": int(len(rows)),
+                            "mean_selected_alpha": float(np.mean(alpha_series_fold)),
+                            "mean_selected_beta": float(np.mean(beta_series_fold)),
+                            "mean_selected_gate_threshold": float(np.mean(gate_series_fold)),
+                            "mean_selected_change_gate_threshold": float(
+                                np.mean(change_gate_series_fold)
+                            ),
+                            "mean_selected_change_alpha_weight": float(
+                                np.mean(change_alpha_weight_series_fold)
+                            ),
+                            "mean_selected_class_thresholds": class_threshold_mode,
+                            "selected_calibration_method": calibration_method_mode,
+                            "mean_effective_alpha_fold": float(np.mean(eff_alpha_series_fold)),
+                            "mean_change_alpha_multiplier_fold": _safe_mean(
+                                change_alpha_multiplier_series
+                            ),
+                            "mean_confidence_fold": _safe_mean(confidence_series),
+                            "mean_gating_rate_fold": _safe_mean(gating_rate_series),
+                            "mean_confidence_gating_rate_fold": _safe_mean(
+                                confidence_gating_rate_series
+                            ),
+                            "mean_change_gating_rate_fold": _safe_mean(change_gating_rate_series),
+                            "mean_p_change_fold": _safe_mean(mean_p_change_series),
+                            "gkg_change_enabled_rate_fold": _safe_mean(gkg_change_enabled_series),
+                            "use_gkg_change_gate": bool(args.use_gkg_change_gate),
+                            "use_gkg_change_alpha": bool(args.use_gkg_change_alpha),
+                            "gkg_change_alpha_weights_grid": ",".join(
+                                str(v) for v in asset_gkg_change_alpha_weights
+                            ),
+                            "gkg_change_model": str(
+                                Counter([str(r.get("gkg_change_model", "")) for r in rows]).most_common(1)[0][0]
+                            ),
+                            "gkg_change_context_cols": str(
+                                Counter([str(r.get("gkg_change_context_cols", "")) for r in rows]).most_common(1)[0][0]
+                            ),
+                            "gkg_change_calibration_method": str(
+                                Counter(
+                                    [str(r.get("gkg_change_calibration_method", "")) for r in rows]
+                                ).most_common(1)[0][0]
+                            ),
+                            "mean_gkg_change_n_features": _safe_mean(
+                                [float(r.get("gkg_change_n_features", np.nan)) for r in rows]
+                            ),
+                            "mean_gkg_change_eval_macro_f1": _safe_mean(gkg_change_macro_f1_series),
+                            "mean_gkg_change_eval_auc": _safe_mean(gkg_change_auc_series),
+                            "mean_gkg_change_eval_brier": _safe_mean(gkg_change_brier_series),
+                            "mean_gkg_change_eval_p_change_mean": _safe_mean(
+                                gkg_change_pchange_mean_series
+                            ),
+                            "gkg_change_blend_hook_weight": float(
                                 args.gkg_change_blend_hook_weight
                             ),
-                        )
-                        combo_metrics[x_idx].append(res)
-                        res_row = {
-                            k: v
-                            for k, v in res.items()
-                            if k
-                            not in {
-                                "proba_valid",
-                                "y_valid",
-                                "y_valid_regime",
-                                "regime_prev_valid",
-                                "persist_valid_pred",
-                                "persist_valid_regime_pred",
-                                "gkg_change_p_change_eval",
-                                "gkg_change_y_eval",
-                                "gkg_change_pred_eval",
-                            }
+                            "oof_selected_alpha": float(oof_selected_alpha),
+                            "oof_selected_beta": float(oof_selected_beta),
+                            "oof_selected_gate_threshold": float(oof_selected_gate_threshold),
+                            "oof_selected_change_gate_threshold": float(
+                                oof_selected_change_gate_threshold
+                            ),
+                            "oof_selected_change_alpha_weight": float(
+                                oof_selected_change_alpha_weight
+                            ),
+                            "oof_selected_class_thresholds": _format_class_thresholds(
+                                oof_selected_class_thresholds
+                            ),
+                            "oof_mean_effective_alpha": float(oof_best_m["mean_effective_alpha"]),
+                            "oof_mean_change_alpha_multiplier": float(
+                                oof_best_m["mean_change_alpha_multiplier"]
+                            ),
+                            "oof_mean_confidence": float(oof_best_m["mean_confidence"]),
+                            "oof_gating_rate": float(oof_best_m["gating_rate"]),
+                            "oof_confidence_gating_rate": float(
+                                oof_best_m["confidence_gating_rate"]
+                            ),
+                            "oof_change_gating_rate": float(oof_best_m["change_gating_rate"]),
+                            "oof_mean_p_change": float(oof_best_m["mean_p_change"]),
+                            "oof_valid_acc": float(oof_best_m["acc"]),
+                            "oof_valid_macro_f1": float(oof_best_m["macro_f1"]),
+                            "oof_valid_weighted_f1": float(oof_best_m["weighted_f1"]),
+                            "oof_valid_macro_recall": float(oof_best_m["macro_recall"]),
+                            "oof_valid_high_vol_recall": float(oof_best_m["high_vol_recall"]),
+                            "oof_valid_target_acc": float(oof_best_m["target_acc"]),
+                            "oof_valid_target_macro_f1": float(oof_best_m["target_macro_f1"]),
+                            "oof_valid_target_weighted_f1": float(oof_best_m["target_weighted_f1"]),
+                            "oof_valid_target_macro_recall": float(oof_best_m["target_macro_recall"]),
+                            "oof_valid_target_high_vol_recall": float(
+                                oof_best_m["target_high_vol_recall"]
+                            ),
+                            "oof_delta_macro_vs_persistence": float(
+                                oof_best_m["delta_macro_f1_vs_persistence"]
+                            ),
+                            "oof_delta_transition_macro_f1_vs_persistence": float(
+                                oof_best_m["delta_transition_macro_f1_vs_persistence"]
+                            ),
+                            "oof_delta_high_vol_recall_vs_persistence": float(
+                                oof_best_m["delta_high_vol_recall_vs_persistence"]
+                            ),
+                            "mean_valid_acc": float(np.mean(acc_series)),
+                            "mean_valid_macro_f1": float(np.mean(macro_series)),
+                            "mean_valid_weighted_f1": float(np.mean(weighted_series)),
+                            "mean_valid_macro_recall": float(np.mean(macro_recall_series)),
+                            "mean_valid_high_vol_recall": float(np.mean(high_vol_recall_series)),
+                            "std_valid_macro_f1": float(np.std(macro_series)),
+                            "mean_delta_macro_vs_persistence": float(np.mean(delta_series)),
+                            "mean_delta_weighted_vs_persistence": float(np.mean(delta_weighted_series)),
+                            "mean_delta_macro_recall_vs_persistence": float(
+                                np.mean(delta_macro_recall_series)
+                            ),
+                            "mean_delta_high_vol_recall_vs_persistence": float(
+                                np.mean(delta_high_vol_recall_series)
+                            ),
+                            "mean_delta_transition_macro_f1_vs_persistence": _safe_mean(
+                                delta_transition_macro_f1_series
+                            ),
+                            "mean_delta_non_transition_macro_f1_vs_persistence": _safe_mean(
+                                delta_non_transition_macro_f1_series
+                            ),
+                            "std_delta_macro_vs_persistence": float(np.std(delta_series)),
+                            "positive_delta_rate": positive_rate,
+                            "non_transition_penalty": float(non_transition_penalty),
+                            "transition_bonus": float(transition_bonus),
+                            "robust_score": robust_score,
+                            "pruned": bool(pruned_at[x_idx] is not None),
+                            "pruned_at_fold": pruned_at[x_idx],
                         }
-                        fold_rows.append(
-                            {
-                                "asset": asset_name,
-                                "tickers": "|".join(group_tickers),
-                                "tabular_model": str(args.tabular_model),
-                                "struct_id": s_idx,
-                                "model_id": x_idx,
-                                "xgb_id": x_idx,
-                                "fold_id": fold_idx,
-                                "train_end": train_end,
-                                "valid_end": valid_end,
-                                **s_cfg,
-                                **xgb_cfgs[x_idx],
-                                **res_row,
-                            }
-                        )
-                    except Exception as e:
-                        fold_rows.append(
-                            {
-                                "asset": asset_name,
-                                "tickers": "|".join(group_tickers),
-                                "tabular_model": str(args.tabular_model),
-                                "struct_id": s_idx,
-                                "model_id": x_idx,
-                                "xgb_id": x_idx,
-                                "fold_id": fold_idx,
-                                "train_end": train_end,
-                                "valid_end": valid_end,
-                                **s_cfg,
-                                **xgb_cfgs[x_idx],
-                                "error": repr(e),
-                            }
-                        )
-
-                if int(args.prune_after_folds) > 0:
-                    for x_idx in list(active_xgb):
-                        rows = combo_metrics[x_idx]
-                        if len(rows) < int(args.prune_after_folds):
-                            continue
-                        mean_delta = float(np.mean([r["delta_macro_f1_vs_persistence"] for r in rows]))
-                        mean_non_transition_delta = float(
-                            np.mean(
-                                [
-                                    r["delta_non_transition_macro_f1_vs_persistence"]
-                                    for r in rows
-                                ]
-                            )
-                        )
-                        mean_high_vol_recall_delta = float(
-                            np.mean([r["delta_high_vol_recall_vs_persistence"] for r in rows])
-                        )
-                        if (
-                            mean_delta < float(args.prune_delta_threshold)
-                            or mean_non_transition_delta < float(args.min_non_transition_delta)
-                            or mean_high_vol_recall_delta < float(args.min_high_vol_recall_delta)
-                        ):
-                            active_xgb.remove(x_idx)
-                            pruned_at[x_idx] = fold_idx
-
-                if not active_xgb:
-                    break
-
-            for x_idx, rows in combo_metrics.items():
-                if not rows:
-                    continue
-                alpha_series_fold = np.array([r["selected_alpha"] for r in rows], dtype=float)
-                beta_series_fold = np.array([r["selected_beta"] for r in rows], dtype=float)
-                eff_alpha_series_fold = np.array([r["mean_effective_alpha"] for r in rows], dtype=float)
-
-                oof_proba = np.vstack([np.asarray(r["proba_valid"], dtype=float) for r in rows])
-                oof_y_target = np.concatenate(
-                    [np.asarray(r["y_valid"], dtype=int) for r in rows]
-                ).astype(int)
-                oof_y_regime = np.concatenate(
-                    [np.asarray(r["y_valid_regime"], dtype=int) for r in rows]
-                ).astype(int)
-                oof_persist_target = np.concatenate(
-                    [np.asarray(r["persist_valid_pred"], dtype=int) for r in rows]
-                ).astype(int)
-                oof_persist_regime = np.concatenate(
-                    [np.asarray(r["persist_valid_regime_pred"], dtype=int) for r in rows]
-                ).astype(int)
-                oof_p_change = (
-                    np.concatenate(
-                        [np.asarray(r["gkg_change_p_change_eval"], dtype=float) for r in rows]
-                    ).astype(float)
-                    if bool(args.use_gkg_change_gate or args.use_gkg_change_alpha)
-                    else None
-                )
-
-                m_oof_persist_target = compute_metrics(oof_y_target, oof_persist_target)
-                oof_persist_target_metrics = {
-                    "acc": float(m_oof_persist_target.accuracy),
-                    "macro_f1": float(m_oof_persist_target.macro_f1),
-                    "weighted_f1": float(m_oof_persist_target.weighted_f1),
-                    "macro_recall": float(m_oof_persist_target.macro_recall),
-                    "high_vol_recall": _high_vol_recall(m_oof_persist_target),
-                }
-                m_oof_persist_regime = compute_metrics(oof_y_regime, oof_persist_regime)
-                oof_persist_regime_metrics = {
-                    "acc": float(m_oof_persist_regime.accuracy),
-                    "macro_f1": float(m_oof_persist_regime.macro_f1),
-                    "weighted_f1": float(m_oof_persist_regime.weighted_f1),
-                    "macro_recall": float(m_oof_persist_regime.macro_recall),
-                    "high_vol_recall": _high_vol_recall(m_oof_persist_regime),
-                }
-
-                oof_n_classes = int(np.asarray(oof_proba).shape[1])
-                oof_selected_cfg, oof_best_m = _pick_best_blend_strategy(
-                    proba_chain=oof_proba,
-                    y_true_target=oof_y_target,
-                    y_persist_target=oof_persist_target,
-                    y_true_regime=oof_y_regime,
-                    blend_alphas=blend_alphas if bool(args.use_blend) else (1.0,),
-                    blend_conf_betas=blend_conf_betas if bool(args.use_blend) else (0.0,),
-                    class_threshold_grid=(
-                        class_threshold_grid
-                        if bool(args.use_blend)
-                        else (tuple(np.ones(oof_n_classes, dtype=float).tolist()),)
-                    ),
-                    gate_thresholds=gate_thresholds if bool(args.use_blend) else (0.0,),
-                    persist_target_metrics=oof_persist_target_metrics,
-                    persist_regime_metrics=oof_persist_regime_metrics,
-                    p_change=oof_p_change,
-                    change_gate_thresholds=(
-                        gkg_change_gate_thresholds if bool(args.use_gkg_change_gate) else (0.0,)
-                    ),
-                    change_alpha_weights=(
-                        asset_gkg_change_alpha_weights
-                        if bool(args.use_gkg_change_alpha)
-                        else (0.0,)
-                    ),
-                    min_non_transition_delta=float(args.min_non_transition_delta),
-                )
-                oof_selected_alpha = float(oof_selected_cfg["selected_alpha"])
-                oof_selected_beta = float(oof_selected_cfg["selected_beta"])
-                oof_selected_class_thresholds = _parse_class_thresholds(
-                    oof_selected_cfg["selected_class_thresholds"],
-                    n_classes=oof_n_classes,
-                )
-                oof_selected_gate_threshold = float(
-                    np.clip(oof_selected_cfg["selected_gate_threshold"], 0.0, 1.0)
-                )
-                oof_selected_change_gate_threshold = float(
-                    np.clip(oof_selected_cfg.get("selected_change_gate_threshold", 0.0), 0.0, 1.0)
-                )
-                oof_selected_change_alpha_weight = float(
-                    np.clip(oof_selected_cfg.get("selected_change_alpha_weight", 0.0), 0.0, 1.0)
-                )
-
-                fold_eval_metrics = []
-                for r in rows:
-                    fold_persist = {
-                        "acc": float(r["persist_valid_acc"]),
-                        "macro_f1": float(r["persist_valid_macro_f1"]),
-                        "weighted_f1": float(r["persist_valid_weighted_f1"]),
-                        "macro_recall": float(r["persist_valid_macro_recall"]),
-                        "high_vol_recall": float(r["persist_valid_high_vol_recall"]),
-                    }
-                    fold_persist_target = {
-                        "acc": float(r["persist_valid_target_acc"]),
-                        "macro_f1": float(r["persist_valid_target_macro_f1"]),
-                        "weighted_f1": float(r["persist_valid_target_weighted_f1"]),
-                        "macro_recall": float(r["persist_valid_target_macro_recall"]),
-                        "high_vol_recall": float(r["persist_valid_target_high_vol_recall"]),
-                    }
-                    fm = _blend_metrics(
-                        proba_chain=np.asarray(r["proba_valid"], dtype=float),
-                        y_true_target=np.asarray(r["y_valid"], dtype=int),
-                        y_persist_target=np.asarray(r["persist_valid_pred"], dtype=int),
-                        y_true_regime=np.asarray(r["y_valid_regime"], dtype=int),
-                        persist_target_metrics=fold_persist_target,
-                        persist_regime_metrics=fold_persist,
-                        alpha=float(oof_selected_alpha),
-                        beta=float(oof_selected_beta),
-                        class_thresholds=oof_selected_class_thresholds,
-                        gate_threshold=oof_selected_gate_threshold,
-                        p_change=(
-                            np.asarray(r["gkg_change_p_change_eval"], dtype=float)
-                            if bool(args.use_gkg_change_gate or args.use_gkg_change_alpha)
-                            else None
-                        ),
-                        change_gate_threshold=float(oof_selected_change_gate_threshold),
-                        change_alpha_weight=float(oof_selected_change_alpha_weight),
                     )
-                    fold_eval_metrics.append(fm)
 
-                acc_series = np.array([m["acc"] for m in fold_eval_metrics], dtype=float)
-                macro_series = np.array([m["macro_f1"] for m in fold_eval_metrics], dtype=float)
-                weighted_series = np.array([m["weighted_f1"] for m in fold_eval_metrics], dtype=float)
-                macro_recall_series = np.array([m["macro_recall"] for m in fold_eval_metrics], dtype=float)
-                high_vol_recall_series = np.array(
-                    [m["high_vol_recall"] for m in fold_eval_metrics], dtype=float
-                )
-                delta_series = np.array(
-                    [m["delta_macro_f1_vs_persistence"] for m in fold_eval_metrics], dtype=float
-                )
-                delta_weighted_series = np.array(
-                    [m["delta_weighted_f1_vs_persistence"] for m in fold_eval_metrics], dtype=float
-                )
-                delta_macro_recall_series = np.array(
-                    [m["delta_macro_recall_vs_persistence"] for m in fold_eval_metrics], dtype=float
-                )
-                delta_high_vol_recall_series = np.array(
-                    [m["delta_high_vol_recall_vs_persistence"] for m in fold_eval_metrics], dtype=float
-                )
-                delta_transition_macro_f1_series = np.array(
-                    [m["delta_transition_macro_f1_vs_persistence"] for m in fold_eval_metrics],
-                    dtype=float,
-                )
-                delta_non_transition_macro_f1_series = np.array(
-                    [m["delta_non_transition_macro_f1_vs_persistence"] for m in fold_eval_metrics],
-                    dtype=float,
-                )
-                gating_rate_series = np.array([m["gating_rate"] for m in fold_eval_metrics], dtype=float)
-                confidence_gating_rate_series = np.array(
-                    [m["confidence_gating_rate"] for m in fold_eval_metrics], dtype=float
-                )
-                change_gating_rate_series = np.array(
-                    [m["change_gating_rate"] for m in fold_eval_metrics], dtype=float
-                )
-                mean_p_change_series = np.array(
-                    [m["mean_p_change"] for m in fold_eval_metrics], dtype=float
-                )
-                confidence_series = np.array([m["mean_confidence"] for m in fold_eval_metrics], dtype=float)
-                change_alpha_multiplier_series = np.array(
-                    [m["mean_change_alpha_multiplier"] for m in fold_eval_metrics], dtype=float
-                )
-                gkg_change_enabled_series = np.array(
-                    [float(bool(r.get("gkg_change_enabled", False))) for r in rows], dtype=float
-                )
-                gkg_change_macro_f1_series = np.array(
-                    [float(r.get("gkg_change_eval_macro_f1", np.nan)) for r in rows], dtype=float
-                )
-                gkg_change_auc_series = np.array(
-                    [float(r.get("gkg_change_eval_auc", np.nan)) for r in rows], dtype=float
-                )
-                gkg_change_brier_series = np.array(
-                    [float(r.get("gkg_change_eval_brier", np.nan)) for r in rows], dtype=float
-                )
-                gkg_change_pchange_mean_series = np.array(
-                    [float(r.get("gkg_change_eval_p_change_mean", np.nan)) for r in rows],
-                    dtype=float,
+            summary_df = pd.DataFrame(summary_rows)
+            if summary_df.empty:
+                failed_rows = [r for r in fold_rows if "error" in r]
+                if failed_rows:
+                    pd.DataFrame(failed_rows).to_csv(outdir / "failed_experiments.csv", index=False)
+                raise SystemExit(f"No successful experiments in walk-forward for asset={asset_name}.")
+
+            summary_df = summary_df[summary_df["n_folds_ok"] >= int(args.min_folds_ok)].copy()
+            if summary_df.empty:
+                raise SystemExit(f"No experiments satisfied min_folds_ok for asset={asset_name}.")
+
+            summary_df = summary_df[
+                summary_df["mean_delta_high_vol_recall_vs_persistence"]
+                >= float(args.min_high_vol_recall_delta)
+            ].copy()
+            if summary_df.empty:
+                raise SystemExit(
+                    f"No experiments satisfied high-vol recall constraint for asset={asset_name}. "
+                    f"Try lowering --min_high_vol_recall_delta."
                 )
 
-                positive_rate = float(np.mean(delta_series > 0.0))
-                stability_penalty = float(args.stability_lambda) * float(np.std(delta_series))
-                positive_gap = max(0.0, float(args.min_positive_rate) - positive_rate)
-                positive_penalty = float(args.positive_rate_lambda) * positive_gap
-                mean_non_transition_delta = float(
-                    np.nan_to_num(_safe_mean(delta_non_transition_macro_f1_series), nan=-1.0)
-                )
-                non_transition_gap = max(
-                    0.0, float(args.min_non_transition_delta) - mean_non_transition_delta
-                )
-                non_transition_penalty = (
-                    float(args.non_transition_penalty_lambda) * non_transition_gap
-                )
-                transition_bonus = float(args.transition_bonus_lambda) * float(
-                    np.nan_to_num(_safe_mean(delta_transition_macro_f1_series), nan=0.0)
-                )
-                robust_score = (
-                    float(np.mean(delta_series))
-                    - stability_penalty
-                    - positive_penalty
-                    - non_transition_penalty
-                    + transition_bonus
-                )
+            summary_df_non_transition = summary_df[
+                summary_df["mean_delta_non_transition_macro_f1_vs_persistence"]
+                >= float(args.min_non_transition_delta)
+            ].copy()
+            if not summary_df_non_transition.empty:
+                summary_df = summary_df_non_transition
 
-                gate_series_fold = np.array(
-                    [float(r.get("selected_gate_threshold", 0.0)) for r in rows], dtype=float
-                )
-                change_gate_series_fold = np.array(
-                    [float(r.get("selected_change_gate_threshold", 0.0)) for r in rows],
-                    dtype=float,
-                )
-                change_alpha_weight_series_fold = np.array(
-                    [float(r.get("selected_change_alpha_weight", 0.0)) for r in rows],
-                    dtype=float,
-                )
-                class_threshold_tokens = [
-                    str(r.get("selected_class_thresholds", _format_class_thresholds([1.0, 1.0, 1.0])))
-                    for r in rows
-                ]
-                class_threshold_mode = Counter(class_threshold_tokens).most_common(1)[0][0]
-                cal_method_tokens = [str(r.get("calibration_method", "none")) for r in rows]
-                calibration_method_mode = Counter(cal_method_tokens).most_common(1)[0][0]
+            summary_df = summary_df.sort_values(
+                [
+                    "robust_score",
+                    "mean_delta_non_transition_macro_f1_vs_persistence",
+                    "mean_delta_high_vol_recall_vs_persistence",
+                    "mean_delta_macro_vs_persistence",
+                    "mean_valid_macro_f1",
+                ],
+                ascending=[False, False, False, False, False],
+            )
+            best = summary_df.iloc[0].to_dict()
+            global_best_rows.append(best)
 
-                summary_rows.append(
+            pd.DataFrame(fold_rows).to_csv(outdir / "fold_metrics.csv", index=False)
+            summary_df.to_csv(outdir / "summary.csv", index=False)
+            with open(outdir / "best.json", "w", encoding="utf-8") as f:
+                json.dump(best, f, indent=2, ensure_ascii=False)
+
+            final_cmp = _official_test_compare(
+                db_path=db_path,
+                tickers=group_tickers,
+                horizon=int(args.horizon),
+                regime_bins=regime_bins,
+                train_end=features_cfg["split"]["train_end"],
+                valid_end=features_cfg["split"]["val_end"],
+                struct_cfg={
+                    "chain_mean_model": best.get("chain_mean_model", "sarimax"),
+                    "sarimax_order": best["sarimax_order"],
+                    "sarimax_chain_exog_cols": best["sarimax_chain_exog_cols"],
+                    "har_target_col": best.get("har_target_col", "rv_20"),
+                    "har_lag_1": best.get("har_lag_1", 1),
+                    "har_lag_week": best.get("har_lag_week", 5),
+                    "har_lag_month": best.get("har_lag_month", 22),
+                    "har_exog_cols": best.get("har_exog_cols", ()),
+                    "garch_p": best["garch_p"],
+                    "garch_o": best.get("garch_o", 1),
+                    "garch_q": best["garch_q"],
+                    "garch_dist": best["garch_dist"],
+                    "garch_vol": best.get("garch_vol", "Garch"),
+                    "garch_chain_agg": best["garch_chain_agg"],
+                    "garch_scale": best["garch_scale"],
+                },
+                model_cfg=(
                     {
-                        "asset": asset_name,
-                        "tickers": "|".join(group_tickers),
-                        "tabular_model": str(args.tabular_model),
-                        "struct_id": s_idx,
-                        "model_id": x_idx,
-                        "xgb_id": x_idx,
-                        **s_cfg,
-                        **xgb_cfgs[x_idx],
-                        "n_folds_ok": int(len(rows)),
-                        "mean_selected_alpha": float(np.mean(alpha_series_fold)),
-                        "mean_selected_beta": float(np.mean(beta_series_fold)),
-                        "mean_selected_gate_threshold": float(np.mean(gate_series_fold)),
-                        "mean_selected_change_gate_threshold": float(
-                            np.mean(change_gate_series_fold)
-                        ),
-                        "mean_selected_change_alpha_weight": float(
-                            np.mean(change_alpha_weight_series_fold)
-                        ),
-                        "mean_selected_class_thresholds": class_threshold_mode,
-                        "selected_calibration_method": calibration_method_mode,
-                        "mean_effective_alpha_fold": float(np.mean(eff_alpha_series_fold)),
-                        "mean_change_alpha_multiplier_fold": _safe_mean(
-                            change_alpha_multiplier_series
-                        ),
-                        "mean_confidence_fold": _safe_mean(confidence_series),
-                        "mean_gating_rate_fold": _safe_mean(gating_rate_series),
-                        "mean_confidence_gating_rate_fold": _safe_mean(
-                            confidence_gating_rate_series
-                        ),
-                        "mean_change_gating_rate_fold": _safe_mean(change_gating_rate_series),
-                        "mean_p_change_fold": _safe_mean(mean_p_change_series),
-                        "gkg_change_enabled_rate_fold": _safe_mean(gkg_change_enabled_series),
-                        "use_gkg_change_gate": bool(args.use_gkg_change_gate),
-                        "use_gkg_change_alpha": bool(args.use_gkg_change_alpha),
-                        "gkg_change_alpha_weights_grid": ",".join(
-                            str(v) for v in asset_gkg_change_alpha_weights
-                        ),
-                        "gkg_change_model": str(
-                            Counter([str(r.get("gkg_change_model", "")) for r in rows]).most_common(1)[0][0]
-                        ),
-                        "gkg_change_context_cols": str(
-                            Counter([str(r.get("gkg_change_context_cols", "")) for r in rows]).most_common(1)[0][0]
-                        ),
-                        "gkg_change_calibration_method": str(
-                            Counter(
-                                [str(r.get("gkg_change_calibration_method", "")) for r in rows]
-                            ).most_common(1)[0][0]
-                        ),
-                        "mean_gkg_change_n_features": _safe_mean(
-                            [float(r.get("gkg_change_n_features", np.nan)) for r in rows]
-                        ),
-                        "mean_gkg_change_eval_macro_f1": _safe_mean(gkg_change_macro_f1_series),
-                        "mean_gkg_change_eval_auc": _safe_mean(gkg_change_auc_series),
-                        "mean_gkg_change_eval_brier": _safe_mean(gkg_change_brier_series),
-                        "mean_gkg_change_eval_p_change_mean": _safe_mean(
-                            gkg_change_pchange_mean_series
-                        ),
-                        "gkg_change_blend_hook_weight": float(
-                            args.gkg_change_blend_hook_weight
-                        ),
-                        "oof_selected_alpha": float(oof_selected_alpha),
-                        "oof_selected_beta": float(oof_selected_beta),
-                        "oof_selected_gate_threshold": float(oof_selected_gate_threshold),
-                        "oof_selected_change_gate_threshold": float(
-                            oof_selected_change_gate_threshold
-                        ),
-                        "oof_selected_change_alpha_weight": float(
-                            oof_selected_change_alpha_weight
-                        ),
-                        "oof_selected_class_thresholds": _format_class_thresholds(
-                            oof_selected_class_thresholds
-                        ),
-                        "oof_mean_effective_alpha": float(oof_best_m["mean_effective_alpha"]),
-                        "oof_mean_change_alpha_multiplier": float(
-                            oof_best_m["mean_change_alpha_multiplier"]
-                        ),
-                        "oof_mean_confidence": float(oof_best_m["mean_confidence"]),
-                        "oof_gating_rate": float(oof_best_m["gating_rate"]),
-                        "oof_confidence_gating_rate": float(
-                            oof_best_m["confidence_gating_rate"]
-                        ),
-                        "oof_change_gating_rate": float(oof_best_m["change_gating_rate"]),
-                        "oof_mean_p_change": float(oof_best_m["mean_p_change"]),
-                        "oof_valid_acc": float(oof_best_m["acc"]),
-                        "oof_valid_macro_f1": float(oof_best_m["macro_f1"]),
-                        "oof_valid_weighted_f1": float(oof_best_m["weighted_f1"]),
-                        "oof_valid_macro_recall": float(oof_best_m["macro_recall"]),
-                        "oof_valid_high_vol_recall": float(oof_best_m["high_vol_recall"]),
-                        "oof_valid_target_acc": float(oof_best_m["target_acc"]),
-                        "oof_valid_target_macro_f1": float(oof_best_m["target_macro_f1"]),
-                        "oof_valid_target_weighted_f1": float(oof_best_m["target_weighted_f1"]),
-                        "oof_valid_target_macro_recall": float(oof_best_m["target_macro_recall"]),
-                        "oof_valid_target_high_vol_recall": float(
-                            oof_best_m["target_high_vol_recall"]
-                        ),
-                        "oof_delta_macro_vs_persistence": float(
-                            oof_best_m["delta_macro_f1_vs_persistence"]
-                        ),
-                        "oof_delta_transition_macro_f1_vs_persistence": float(
-                            oof_best_m["delta_transition_macro_f1_vs_persistence"]
-                        ),
-                        "oof_delta_high_vol_recall_vs_persistence": float(
-                            oof_best_m["delta_high_vol_recall_vs_persistence"]
-                        ),
-                        "mean_valid_acc": float(np.mean(acc_series)),
-                        "mean_valid_macro_f1": float(np.mean(macro_series)),
-                        "mean_valid_weighted_f1": float(np.mean(weighted_series)),
-                        "mean_valid_macro_recall": float(np.mean(macro_recall_series)),
-                        "mean_valid_high_vol_recall": float(np.mean(high_vol_recall_series)),
-                        "std_valid_macro_f1": float(np.std(macro_series)),
-                        "mean_delta_macro_vs_persistence": float(np.mean(delta_series)),
-                        "mean_delta_weighted_vs_persistence": float(np.mean(delta_weighted_series)),
-                        "mean_delta_macro_recall_vs_persistence": float(
-                            np.mean(delta_macro_recall_series)
-                        ),
-                        "mean_delta_high_vol_recall_vs_persistence": float(
-                            np.mean(delta_high_vol_recall_series)
-                        ),
-                        "mean_delta_transition_macro_f1_vs_persistence": _safe_mean(
-                            delta_transition_macro_f1_series
-                        ),
-                        "mean_delta_non_transition_macro_f1_vs_persistence": _safe_mean(
-                            delta_non_transition_macro_f1_series
-                        ),
-                        "std_delta_macro_vs_persistence": float(np.std(delta_series)),
-                        "positive_delta_rate": positive_rate,
-                        "non_transition_penalty": float(non_transition_penalty),
-                        "transition_bonus": float(transition_bonus),
-                        "robust_score": robust_score,
-                        "pruned": bool(pruned_at[x_idx] is not None),
-                        "pruned_at_fold": pruned_at[x_idx],
+                        "n_estimators": best["n_estimators"],
+                        "max_depth": best["max_depth"],
+                        "learning_rate": best["learning_rate"],
+                        "subsample": best["subsample"],
+                        "colsample_bytree": best["colsample_bytree"],
+                        "min_child_weight": best["min_child_weight"],
+                        "reg_lambda": best["reg_lambda"],
                     }
-                )
-
-        summary_df = pd.DataFrame(summary_rows)
-        if summary_df.empty:
-            failed_rows = [r for r in fold_rows if "error" in r]
-            if failed_rows:
-                pd.DataFrame(failed_rows).to_csv(outdir / "failed_experiments.csv", index=False)
-            raise SystemExit(f"No successful experiments in walk-forward for asset={asset_name}.")
-
-        summary_df = summary_df[summary_df["n_folds_ok"] >= int(args.min_folds_ok)].copy()
-        if summary_df.empty:
-            raise SystemExit(f"No experiments satisfied min_folds_ok for asset={asset_name}.")
-
-        summary_df = summary_df[
-            summary_df["mean_delta_high_vol_recall_vs_persistence"]
-            >= float(args.min_high_vol_recall_delta)
-        ].copy()
-        if summary_df.empty:
-            raise SystemExit(
-                f"No experiments satisfied high-vol recall constraint for asset={asset_name}. "
-                f"Try lowering --min_high_vol_recall_delta."
+                    if str(args.tabular_model) == "xgb"
+                    else {
+                        "n_estimators": best.get("n_estimators", 8),
+                        "softmax_temperature": best.get("softmax_temperature", 0.9),
+                        "balance_probabilities": best.get("balance_probabilities", False),
+                        "average_before_softmax": best.get("average_before_softmax", False),
+                        "model_path": best.get(
+                            "model_path", "tabpfn-v2-classifier-v2_default.ckpt"
+                        ),
+                        "device": best.get("device", str(args.tabpfn_device)),
+                        "ignore_pretraining_limits": best.get("ignore_pretraining_limits", True),
+                        "inference_precision": best.get("inference_precision", "auto"),
+                        "fit_mode": best.get("fit_mode", "fit_preprocessors"),
+                        "memory_saving_mode": best.get("memory_saving_mode", "auto"),
+                        "random_state": best.get("random_state", 42),
+                        "n_preprocessing_jobs": best.get(
+                            "n_preprocessing_jobs", int(args.tabpfn_n_preprocessing_jobs)
+                        ),
+                    }
+                ),
+                tabular_model=str(args.tabular_model),
+                xgb_n_jobs=int(args.xgb_n_jobs),
+                use_blend=bool(args.use_blend),
+                blend_alpha=float(best.get("oof_selected_alpha", best.get("mean_selected_alpha", 1.0))),
+                blend_beta=float(best.get("oof_selected_beta", 0.0)),
+                blend_class_thresholds=_parse_class_thresholds(
+                    best.get(
+                        "oof_selected_class_thresholds",
+                        best.get("mean_selected_class_thresholds", "1|1|1"),
+                    ),
+                    n_classes=3,
+                ),
+                blend_gate_threshold=float(
+                    best.get(
+                        "oof_selected_gate_threshold",
+                        best.get("mean_selected_gate_threshold", 0.0),
+                    )
+                ),
+                calibration_method=str(best.get("selected_calibration_method", args.calibration_method)),
+                use_gkg_change_detector=bool(args.use_gkg_change_detector),
+                use_gkg_change_gate=bool(args.use_gkg_change_gate),
+                use_gkg_change_alpha=bool(args.use_gkg_change_alpha),
+                gkg_change_model=str(args.gkg_change_model),
+                gkg_change_context_cols=gkg_change_context_cols,
+                gkg_change_calibration_method=str(args.gkg_change_calibration_method),
+                gkg_change_gate_threshold=float(
+                    best.get(
+                        "oof_selected_change_gate_threshold",
+                        best.get("mean_selected_change_gate_threshold", 0.0),
+                    )
+                ),
+                gkg_change_alpha_weight=float(
+                    best.get(
+                        "oof_selected_change_alpha_weight",
+                        best.get("mean_selected_change_alpha_weight", 0.0),
+                    )
+                ),
+                gkg_change_blend_hook_weight=float(args.gkg_change_blend_hook_weight),
+            )
+            final_compare_rows.append(
+                {
+                    "asset": asset_name,
+                    "tickers": "|".join(group_tickers),
+                    "horizon": int(args.horizon),
+                    "tabular_model": str(args.tabular_model),
+                    "selected_struct_id": int(best["struct_id"]),
+                    "selected_model_id": int(best["xgb_id"]),
+                    "selected_xgb_id": int(best["xgb_id"]),
+                    **final_cmp,
+                }
+            )
+            pd.DataFrame([final_compare_rows[-1]]).to_csv(
+                outdir / "final_vs_persistence.csv", index=False
             )
 
-        summary_df_non_transition = summary_df[
-            summary_df["mean_delta_non_transition_macro_f1_vs_persistence"]
-            >= float(args.min_non_transition_delta)
-        ].copy()
-        if not summary_df_non_transition.empty:
-            summary_df = summary_df_non_transition
+            print(
+                f"Asset={asset_name} | Folds={len(folds)} | Struct={len(structural_cfgs)} | "
+                f"{str(args.tabular_model).upper()}={len(xgb_cfgs)}"
+            )
+            print(summary_df.head(5).to_string(index=False))
+            print("\nSaved:", outdir)
 
-        summary_df = summary_df.sort_values(
-            [
-                "robust_score",
-                "mean_delta_non_transition_macro_f1_vs_persistence",
-                "mean_delta_high_vol_recall_vs_persistence",
-                "mean_delta_macro_vs_persistence",
-                "mean_valid_macro_f1",
-            ],
-            ascending=[False, False, False, False, False],
-        )
-        best = summary_df.iloc[0].to_dict()
-        global_best_rows.append(best)
-
-        pd.DataFrame(fold_rows).to_csv(outdir / "fold_metrics.csv", index=False)
-        summary_df.to_csv(outdir / "summary.csv", index=False)
-        with open(outdir / "best.json", "w", encoding="utf-8") as f:
-            json.dump(best, f, indent=2, ensure_ascii=False)
-
-        final_cmp = _official_test_compare(
-            db_path=db_path,
-            tickers=group_tickers,
-            horizon=int(args.horizon),
-            regime_bins=regime_bins,
-            train_end=features_cfg["split"]["train_end"],
-            valid_end=features_cfg["split"]["val_end"],
-            struct_cfg={
-                "chain_mean_model": best.get("chain_mean_model", "sarimax"),
-                "sarimax_order": best["sarimax_order"],
-                "sarimax_chain_exog_cols": best["sarimax_chain_exog_cols"],
-                "har_target_col": best.get("har_target_col", "rv_20"),
-                "har_lag_1": best.get("har_lag_1", 1),
-                "har_lag_week": best.get("har_lag_week", 5),
-                "har_lag_month": best.get("har_lag_month", 22),
-                "har_exog_cols": best.get("har_exog_cols", ()),
-                "garch_p": best["garch_p"],
-                "garch_o": best.get("garch_o", 1),
-                "garch_q": best["garch_q"],
-                "garch_dist": best["garch_dist"],
-                "garch_vol": best.get("garch_vol", "Garch"),
-                "garch_chain_agg": best["garch_chain_agg"],
-                "garch_scale": best["garch_scale"],
-            },
-            model_cfg=(
-                {
-                    "n_estimators": best["n_estimators"],
-                    "max_depth": best["max_depth"],
-                    "learning_rate": best["learning_rate"],
-                    "subsample": best["subsample"],
-                    "colsample_bytree": best["colsample_bytree"],
-                    "min_child_weight": best["min_child_weight"],
-                    "reg_lambda": best["reg_lambda"],
-                }
-                if str(args.tabular_model) == "xgb"
-                else {
-                    "n_estimators": best.get("n_estimators", 8),
-                    "softmax_temperature": best.get("softmax_temperature", 0.9),
-                    "balance_probabilities": best.get("balance_probabilities", False),
-                    "average_before_softmax": best.get("average_before_softmax", False),
-                    "model_path": best.get(
-                        "model_path", "tabpfn-v2-classifier-v2_default.ckpt"
-                    ),
-                    "device": best.get("device", str(args.tabpfn_device)),
-                    "ignore_pretraining_limits": best.get("ignore_pretraining_limits", True),
-                    "inference_precision": best.get("inference_precision", "auto"),
-                    "fit_mode": best.get("fit_mode", "fit_preprocessors"),
-                    "memory_saving_mode": best.get("memory_saving_mode", "auto"),
-                    "random_state": best.get("random_state", 42),
-                    "n_preprocessing_jobs": best.get(
-                        "n_preprocessing_jobs", int(args.tabpfn_n_preprocessing_jobs)
-                    ),
-                }
-            ),
-            tabular_model=str(args.tabular_model),
-            xgb_n_jobs=int(args.xgb_n_jobs),
-            use_blend=bool(args.use_blend),
-            blend_alpha=float(best.get("oof_selected_alpha", best.get("mean_selected_alpha", 1.0))),
-            blend_beta=float(best.get("oof_selected_beta", 0.0)),
-            blend_class_thresholds=_parse_class_thresholds(
-                best.get(
-                    "oof_selected_class_thresholds",
-                    best.get("mean_selected_class_thresholds", "1|1|1"),
-                ),
-                n_classes=3,
-            ),
-            blend_gate_threshold=float(
-                best.get(
-                    "oof_selected_gate_threshold",
-                    best.get("mean_selected_gate_threshold", 0.0),
-                )
-            ),
-            calibration_method=str(best.get("selected_calibration_method", args.calibration_method)),
-            use_gkg_change_detector=bool(args.use_gkg_change_detector),
-            use_gkg_change_gate=bool(args.use_gkg_change_gate),
-            use_gkg_change_alpha=bool(args.use_gkg_change_alpha),
-            gkg_change_model=str(args.gkg_change_model),
-            gkg_change_context_cols=gkg_change_context_cols,
-            gkg_change_calibration_method=str(args.gkg_change_calibration_method),
-            gkg_change_gate_threshold=float(
-                best.get(
-                    "oof_selected_change_gate_threshold",
-                    best.get("mean_selected_change_gate_threshold", 0.0),
-                )
-            ),
-            gkg_change_alpha_weight=float(
-                best.get(
-                    "oof_selected_change_alpha_weight",
-                    best.get("mean_selected_change_alpha_weight", 0.0),
-                )
-            ),
-            gkg_change_blend_hook_weight=float(args.gkg_change_blend_hook_weight),
-        )
-        final_compare_rows.append(
-            {
-                "asset": asset_name,
-                "tickers": "|".join(group_tickers),
-                "horizon": int(args.horizon),
-                "tabular_model": str(args.tabular_model),
-                "selected_struct_id": int(best["struct_id"]),
-                "selected_model_id": int(best["xgb_id"]),
-                "selected_xgb_id": int(best["xgb_id"]),
-                **final_cmp,
-            }
-        )
-        pd.DataFrame([final_compare_rows[-1]]).to_csv(
-            outdir / "final_vs_persistence.csv", index=False
-        )
-
-        print(
-            f"Asset={asset_name} | Folds={len(folds)} | Struct={len(structural_cfgs)} | "
-            f"{str(args.tabular_model).upper()}={len(xgb_cfgs)}"
-        )
-        print(summary_df.head(5).to_string(index=False))
-        print("\nSaved:", outdir)
-
-    root_out = Path(args.outdir) / f"h{args.horizon}"
-    if global_best_rows:
-        pd.DataFrame(global_best_rows).to_csv(root_out / "best_by_asset.csv", index=False)
-        print("\nBest-by-asset:", root_out / "best_by_asset.csv")
-    if final_compare_rows and len(groups) > 1:
-        pd.DataFrame(final_compare_rows).to_csv(root_out / "final_vs_persistence.csv", index=False)
-        print("Final-vs-persistence:", root_out / "final_vs_persistence.csv")
-    return 0
+        root_out = Path(args.outdir) / f"h{args.horizon}"
+        if global_best_rows:
+            pd.DataFrame(global_best_rows).to_csv(root_out / "best_by_asset.csv", index=False)
+            print("\nBest-by-asset:", root_out / "best_by_asset.csv")
+        if final_compare_rows and len(groups) > 1:
+            pd.DataFrame(final_compare_rows).to_csv(root_out / "final_vs_persistence.csv", index=False)
+            print("Final-vs-persistence:", root_out / "final_vs_persistence.csv")
+        # --- MLflow: log parent-level aggregates ---
+        tracking.log_metrics_safe(mlflow_cfg, {
+            "n_asset_groups": float(len(groups)),
+            "n_successful_children": float(len(final_compare_rows)),
+            "mean_delta_test_macro_f1": float(
+                sum(r.get("delta_test_macro_f1_vs_persistence", 0.0) for r in final_compare_rows)
+                / len(final_compare_rows)
+            ) if final_compare_rows else 0.0,
+        })
+        if global_best_rows:
+            tracking.log_artifact_safe(mlflow_cfg, root_out / "best_by_asset.csv")
+        if final_compare_rows and len(groups) > 1:
+            tracking.log_artifact_safe(mlflow_cfg, root_out / "final_vs_persistence.csv")
+        return 0
+    finally:
+        tracking.end_run_safe(mlflow_cfg)  # ends parent run
 
 
 if __name__ == "__main__":
