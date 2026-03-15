@@ -186,3 +186,90 @@ def test_start_child_run_uses_nested_flag():
             mock_mlflow.start_run.assert_called_once_with(
                 run_name="asset=GSPC", nested=True, tags={"asset": "GSPC"}
             )
+
+
+import duckdb
+
+
+def test_read_latest_gkg_manifest_returns_none_when_table_missing():
+    # NamedTemporaryFile is deleted after the `with` block; DuckDB creates a new
+    # empty database at that path on connect, so gkg_ingest_runs will be absent.
+    with tempfile.NamedTemporaryFile(suffix=".duckdb") as f:
+        db_path = f.name
+    from quant_risk.tracking.mlflow_utils import read_latest_gkg_manifest
+    result = read_latest_gkg_manifest(db_path)
+    assert result is None
+
+
+def test_read_latest_gkg_manifest_returns_latest_row():
+    import duckdb
+    from datetime import datetime
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "test.duckdb"
+        con = duckdb.connect(str(db_path))
+        con.execute("""
+            CREATE TABLE gkg_ingest_runs (
+                run_ts TIMESTAMP NOT NULL,
+                profile_name TEXT,
+                profile_version TEXT,
+                profile_mode TEXT,
+                start_date DATE,
+                end_date DATE,
+                topic_ids TEXT,
+                topics_hash TEXT,
+                store_raw BOOLEAN,
+                sample_interval_minutes INTEGER,
+                max_files_per_day INTEGER,
+                max_files_total INTEGER,
+                publication_lag_bdays INTEGER,
+                request_pause_seconds DOUBLE,
+                timeout_seconds INTEGER,
+                max_retries INTEGER,
+                force_refresh_existing BOOLEAN,
+                raw_table TEXT,
+                daily_table TEXT,
+                inserted_raw_rows BIGINT,
+                inserted_daily_rows BIGINT,
+                error_count INTEGER
+            )
+        """)
+        con.execute("""
+            INSERT INTO gkg_ingest_runs
+            (run_ts, profile_name, profile_version, profile_mode, raw_table, daily_table,
+             start_date, end_date, topic_ids, topics_hash, store_raw, sample_interval_minutes,
+             max_files_per_day, max_files_total, publication_lag_bdays, request_pause_seconds,
+             timeout_seconds, max_retries, force_refresh_existing,
+             inserted_raw_rows, inserted_daily_rows, error_count)
+            VALUES
+            ('2026-01-01 10:00:00', 'gkg_v1_light', '2026-03-13', 'light_daily',
+             'gdelt_gkg_raw', 'news_features_daily',
+             '2020-01-01', '2026-01-01', 'macro_us|fed_inflation', 'abc123', false, 180,
+             8, 0, 1, 1.0, 45, 8, false, 100, 50, 0),
+            ('2026-02-01 10:00:00', 'gkg_v1_light', '2026-03-13', 'light_daily',
+             'gdelt_gkg_raw', 'news_features_daily',
+             '2020-01-01', '2026-02-01', 'macro_us|fed_inflation', 'abc123', false, 180,
+             8, 0, 1, 1.0, 45, 8, false, 200, 100, 0)
+        """)
+        con.close()
+        from quant_risk.tracking.mlflow_utils import read_latest_gkg_manifest
+        result = read_latest_gkg_manifest(str(db_path))
+    assert result is not None
+    assert result["profile_name"] == "gkg_v1_light"
+    # Should return the latest row (2026-02-01)
+    assert result["inserted_daily_rows"] == 100
+
+
+def test_build_run_context_contains_expected_keys():
+    import argparse
+    from quant_risk.tracking.mlflow_utils import build_run_context
+    args = argparse.Namespace(horizon=5, tabular_model="xgb", outdir="runs/test")
+    result = build_run_context(
+        args=args,
+        configs={"features": {"split": {}}, "sources": {}},
+        git_sha="abc1234",
+    )
+    assert "git_sha" in result
+    assert "args" in result
+    assert "configs" in result
+    assert result["git_sha"] == "abc1234"
+    assert result["args"]["horizon"] == "5"

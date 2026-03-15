@@ -174,14 +174,49 @@ def log_dict_artifact(cfg: MlflowConfig, data: dict[str, Any], filename: str) ->
         _warn_or_raise(cfg, exc)
 
 
-def read_latest_gkg_manifest(manifest_path: str) -> dict[str, Any]:
-    """Read the latest GKG manifest file and return its contents."""
-    return {}
+def read_latest_gkg_manifest(db_path) -> dict[str, Any] | None:
+    """Query the latest row from gkg_ingest_runs in DuckDB.
+
+    Returns a dict of manifest fields, or None if the table does not exist
+    or the database is empty.
+    """
+    try:
+        import duckdb
+        con = duckdb.connect(str(db_path), read_only=True)
+        try:
+            df = con.execute(
+                "SELECT * FROM gkg_ingest_runs ORDER BY run_ts DESC LIMIT 1"
+            ).fetchdf()
+        finally:
+            con.close()
+        if df.empty:
+            return None
+        return {k: (None if _is_nat(v) else v) for k, v in df.iloc[0].to_dict().items()}
+    except Exception as exc:
+        warnings.warn(f"[mlflow] Could not read gkg_ingest_runs: {exc}")
+        return None
 
 
-def build_run_context(cfg: MlflowConfig, **kwargs: Any) -> dict[str, Any]:
-    """Build a run context dict for tagging MLflow runs."""
-    return {}
+def _is_nat(v: Any) -> bool:
+    """Return True for pandas NaT values (not JSON serializable)."""
+    try:
+        import pandas as pd
+        return pd.isna(v)
+    except Exception:
+        return False
+
+
+def build_run_context(
+    args: Any,
+    configs: dict[str, Any],
+    git_sha: str,
+) -> dict[str, Any]:
+    """Build a JSON-serialisable run-context snapshot from CLI args and loaded configs."""
+    return {
+        "git_sha": git_sha,
+        "args": {k: str(v) for k, v in vars(args).items()},
+        "configs": configs,
+    }
 
 
 def _is_finite_float(v: Any) -> bool:
