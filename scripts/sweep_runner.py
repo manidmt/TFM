@@ -261,8 +261,12 @@ def main() -> None:
 
         study.optimize(objective_with_count, n_trials=n_trials)
 
-        best = study.best_params if any(math.isfinite(t.value or float("-inf")) for t in study.trials) else {}
-        print(f"\n[sweep] asset={asset} | best_robust_score={study.best_value:.4f} | best_params={best}")
+        n_completed = sum(1 for t in study.trials if t.value is not None and math.isfinite(t.value))
+        if n_completed > 0:
+            best = study.best_params
+            print(f"\n[sweep] asset={asset} | best_robust_score={study.best_value:.4f} | best_params={best}")
+        else:
+            print(f"\n[sweep] asset={asset} | no successful trials")
 
         log_sweep_summary(experiment_name, asset, study, n_failed)
 
