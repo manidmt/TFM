@@ -10,8 +10,10 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import subprocess
 import sys
+import tempfile
 import warnings
 from datetime import datetime
 from pathlib import Path
@@ -70,7 +72,7 @@ def build_trial_args(
     if str(params["tabular_model"]) == "tabpfn":
         args += ["--tabpfn_n_estimators", str(params["tabpfn_n_estimators"])]
         args += ["--tabpfn_softmax_temperature", str(params["tabpfn_softmax_temperature"])]
-    else:
+    elif str(params["tabular_model"]) == "xgb":
         args += ["--xgb_max_depth", str(params["xgb_max_depth"])]
         args += ["--xgb_learning_rate", str(params["xgb_learning_rate"])]
 
@@ -190,7 +192,6 @@ def log_sweep_summary(
         ],
     }
 
-    import tempfile, os
     with mlflow.start_run(run_name=run_name):
         mlflow.set_tags({
             "asset": asset,
