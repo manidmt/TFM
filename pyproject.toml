@@ -33,6 +33,7 @@ pandas-datareader = "^0.10.0"
 xgboost = "^3.2.0"
 pytorch-tabnet = "^4.1.0"
 tabpfn = "^6.4.1"
+optuna = "^4.7.0"
 
 [tool.poetry.group.dev.dependencies]
 jupyterlab = "^4.1.0"
