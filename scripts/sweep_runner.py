@@ -57,16 +57,30 @@ def build_trial_args(
             params[name] = trial.suggest_float(name, spec["low"], spec["high"], log=log)
 
     args: list[str] = list(base_args)
+    use_blend = str(params.get("use_blend", "false")) == "true"
+    use_gkg_change_gate = str(params.get("use_gkg_change_gate", "false")) == "true"
+    use_gkg_change_alpha = str(params.get("use_gkg_change_alpha", "false")) == "true"
+    # Gate/alpha only make sense if the detector is enabled; force coherence here so
+    # Optuna does not waste trials on invalid CLI combinations.
+    use_gkg_change_detector = (
+        str(params.get("use_gkg_change_detector", "false")) == "true"
+        or use_gkg_change_gate
+        or use_gkg_change_alpha
+    )
 
     # Always-present flags
     args += ["--tabular_model", str(params["tabular_model"])]
     args += ["--chain_variants_config", str(params["chain_variants_config"])]
 
     # store_true flags
-    if str(params.get("use_blend", "false")) == "true":
+    if use_blend:
         args.append("--use_blend")
-    if str(params.get("use_gkg_change_detector", "false")) == "true":
+    if use_gkg_change_detector:
         args.append("--use_gkg_change_detector")
+    if use_gkg_change_gate:
+        args.append("--use_gkg_change_gate")
+    if use_gkg_change_alpha:
+        args.append("--use_gkg_change_alpha")
 
     # Model-conditional hyperparams
     if str(params["tabular_model"]) == "tabpfn":
@@ -77,8 +91,18 @@ def build_trial_args(
         args += ["--xgb_learning_rate", str(params["xgb_learning_rate"])]
 
     # GKG-conditional flags
-    if str(params.get("use_gkg_change_detector", "false")) == "true":
+    if use_gkg_change_detector:
         args += ["--gkg_change_model", str(params["gkg_change_model"])]
+        if use_gkg_change_gate and "gkg_change_gate_thresholds" in params:
+            args += [
+                "--gkg_change_gate_thresholds",
+                str(params["gkg_change_gate_thresholds"]),
+            ]
+        if use_gkg_change_alpha and "gkg_change_alpha_weights" in params:
+            args += [
+                "--gkg_change_alpha_weights",
+                str(params["gkg_change_alpha_weights"]),
+            ]
         if str(params["gkg_change_model"]) == "tabpfn":
             args += ["--gkg_tabpfn_n_estimators", str(params["gkg_tabpfn_n_estimators"])]
 
@@ -140,6 +164,7 @@ def make_objective(
         mlflow_args = [
             "--use_mlflow",
             "--mlflow_experiment", experiment_name,
+            "--mlflow_parent_run_name", f"trial={trial.number}__asset={asset}__parent",
             "--mlflow_tags_json", json.dumps({
                 "sweep_trial": str(trial.number),
                 "optuna_study": study_name,
@@ -195,6 +220,7 @@ def log_sweep_summary(
     with mlflow.start_run(run_name=run_name):
         mlflow.set_tags({
             "asset": asset,
+            "run_role": "sweep_summary",
             "optuna_study_name": study.study_name,
             "n_trials": str(len(study.trials)),
         })

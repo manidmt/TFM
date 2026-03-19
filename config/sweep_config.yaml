@@ -1,6 +1,6 @@
 sweep:
   n_trials: 60
-  mlflow_experiment: "walk_forward_sweep"
+  mlflow_experiment: "walk_fordward_sweep_adv"
   assets:
     - "^GSPC"
     - "BTC-USD"
@@ -24,9 +24,30 @@ search_space:
     type: categorical
     choices: ["true", "false"]
 
+  use_gkg_change_gate:
+    type: categorical
+    choices: ["false", "true"]
+
+  use_gkg_change_alpha:
+    type: categorical
+    choices: ["false", "true"]
+
   gkg_change_model:
     type: categorical
     choices: [logit, xgb, tabpfn]
+
+  gkg_change_gate_thresholds:
+    type: categorical
+    choices:
+      - "0.0,0.20,0.30,0.40"
+      - "0.0,0.30,0.40,0.50"
+      - "0.0,0.40,0.50,0.60"
+
+  gkg_change_alpha_weights:
+    type: categorical
+    choices:
+      - "0.0,0.10,0.20,0.30"
+      - "0.0,0.25,0.50,0.75,1.0"
 
   # TabPFN hyperparams — passed to CLI only when tabular_model=tabpfn
   tabpfn_n_estimators:

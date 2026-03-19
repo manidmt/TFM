@@ -1932,6 +1932,7 @@ def _fit_eval_tabular(
     gkg_change_gate_thresholds: tuple[float, ...],
     gkg_change_alpha_weights: tuple[float, ...],
     gkg_change_blend_hook_weight: float,
+    gkg_tabpfn_n_estimators: int | None = None,
 ) -> dict[str, Any]:
     """@brief Fit one tabular model and evaluate it on one fold.
 
@@ -2071,7 +2072,7 @@ def _fit_eval_tabular(
             calibration_method=str(gkg_change_calibration_method).lower(),
             context_cols=tuple(gkg_change_context_cols),
             xgb_n_jobs=int(xgb_n_jobs),
-            tabpfn_n_estimators=args.gkg_tabpfn_n_estimators,
+            tabpfn_n_estimators=gkg_tabpfn_n_estimators,
         )
 
     p_change_valid = (
@@ -2266,6 +2267,7 @@ def _official_test_compare(
     gkg_change_gate_threshold: float,
     gkg_change_alpha_weight: float,
     gkg_change_blend_hook_weight: float,
+    gkg_tabpfn_n_estimators: int | None = None,
 ) -> dict[str, Any]:
     """@brief Run final official test evaluation against persistence.
 
@@ -2449,7 +2451,7 @@ def _official_test_compare(
             calibration_method=str(gkg_change_calibration_method).lower(),
             context_cols=tuple(gkg_change_context_cols),
             xgb_n_jobs=int(xgb_n_jobs),
-            tabpfn_n_estimators=args.gkg_tabpfn_n_estimators,
+            tabpfn_n_estimators=gkg_tabpfn_n_estimators,
         )
 
     p_change_test = (
@@ -2620,6 +2622,7 @@ def _build_mlflow_parent_tags(args: Any, git_sha: str, sources_cfg: dict) -> dic
     """Build tags for the parent MLflow run from CLI args and loaded configs."""
     gkg_cfg = sources_cfg.get("gkg", {})
     return {
+        "run_role": "parent_trial",
         "script": "walk_forward_chain_tab.py",
         "component": "walk_forward",
         "git_sha": git_sha,
@@ -2637,6 +2640,7 @@ def _build_mlflow_child_tags(
 ) -> dict[str, str]:
     """Build tags for one child (asset) MLflow run."""
     return {
+        "run_role": "child_asset",
         "asset": str(asset_name),
         "tickers": "|".join(group_tickers),
         "horizon": str(args.horizon),
@@ -2645,6 +2649,42 @@ def _build_mlflow_child_tags(
         "use_gkg_change_gate": str(bool(args.use_gkg_change_gate)),
         "use_gkg_change_alpha": str(bool(args.use_gkg_change_alpha)),
     }
+
+
+def _build_mlflow_parent_run_name(args: Any, extra_tags: dict[str, str]) -> str:
+    """Build a human-readable parent run name.
+
+    When the run is launched from the sweep runner, include the trial number so
+    top-level runs remain easy to identify in the MLflow UI.
+    """
+    ts = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
+    trial = str(extra_tags.get("sweep_trial", "")).strip()
+    asset = str(getattr(args, "asset", "") or "").strip()
+    parts: list[str] = []
+    if trial:
+        parts.append(f"trial={trial}")
+    if asset:
+        parts.append(f"asset={asset}")
+    parts.extend(["parent", f"h{args.horizon}", str(args.tabular_model), ts])
+    return "__".join(parts)
+
+
+def _build_mlflow_child_run_name(
+    asset_name: str,
+    args: Any,
+    extra_tags: dict[str, str],
+) -> str:
+    """Build a human-readable child run name."""
+    trial = str(extra_tags.get("sweep_trial", "")).strip()
+    parts: list[str] = []
+    if trial:
+        parts.append(f"trial={trial}")
+    parts.extend([f"asset={asset_name}", f"h{args.horizon}", str(args.tabular_model)])
+    if bool(args.use_gkg_change_gate):
+        parts.append("gkg-gate")
+    if bool(args.use_gkg_change_alpha):
+        parts.append("gkg-alpha")
+    return "__".join(parts)
 
 
 def _build_mlflow_child_params(args: Any, sources_cfg: dict, features_cfg: dict) -> dict[str, Any]:
@@ -3108,7 +3148,7 @@ def main() -> int:
     _parent_tags = _build_mlflow_parent_tags(args, _git_sha, sources_cfg)
     _auto_run_name = (
         args.mlflow_parent_run_name
-        or f"wf_chain_tab__h{args.horizon}__{args.tabular_model}__{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}"
+        or _build_mlflow_parent_run_name(args, mlflow_cfg.extra_tags)
     )
     _mlflow_parent = tracking.start_parent_run(mlflow_cfg, run_name=_auto_run_name, tags=_parent_tags)
     # Log parent-level params (shared across all assets)
@@ -3127,7 +3167,13 @@ def main() -> int:
             # --- MLflow: open child run for this asset ---
             _child_tags = _build_mlflow_child_tags(asset_name, group_tickers, args)
             _mlflow_child = tracking.start_child_run(
-                mlflow_cfg, run_name=f"asset={asset_name}", tags=_child_tags
+                mlflow_cfg,
+                run_name=_build_mlflow_child_run_name(
+                    asset_name=str(asset_name),
+                    args=args,
+                    extra_tags=mlflow_cfg.extra_tags,
+                ),
+                tags=_child_tags,
             )
             try:
                 asset_gkg_change_alpha_weights = _resolve_asset_specific_grid(
@@ -3197,6 +3243,7 @@ def main() -> int:
                                     gkg_change_blend_hook_weight=float(
                                         args.gkg_change_blend_hook_weight
                                     ),
+                                    gkg_tabpfn_n_estimators=args.gkg_tabpfn_n_estimators,
                                 )
                                 combo_metrics[x_idx].append(res)
                                 res_row = {
@@ -3777,6 +3824,7 @@ def main() -> int:
                         )
                     ),
                     gkg_change_blend_hook_weight=float(args.gkg_change_blend_hook_weight),
+                    gkg_tabpfn_n_estimators=args.gkg_tabpfn_n_estimators,
                 )
                 final_compare_rows.append(
                     {

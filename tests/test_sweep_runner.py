@@ -163,6 +163,56 @@ def test_build_trial_args_gkg_tabpfn_only_when_active():
     assert "--gkg_tabpfn_n_estimators 12" in args_str
 
 
+def test_build_trial_args_explores_gkg_gate_and_alpha_levers():
+    search_space = {
+        "tabular_model": {"type": "categorical", "choices": ["xgb"]},
+        "xgb_max_depth": {"type": "int", "low": 3, "high": 8},
+        "xgb_learning_rate": {"type": "float", "low": 0.01, "high": 0.2},
+        "use_blend": {"type": "categorical", "choices": ["true"]},
+        "use_gkg_change_detector": {"type": "categorical", "choices": ["false", "true"]},
+        "use_gkg_change_gate": {"type": "categorical", "choices": ["false", "true"]},
+        "use_gkg_change_alpha": {"type": "categorical", "choices": ["false", "true"]},
+        "gkg_change_model": {"type": "categorical", "choices": ["logit"]},
+        "gkg_change_gate_thresholds": {
+            "type": "categorical",
+            "choices": ["0.0,0.3,0.4,0.5"],
+        },
+        "gkg_change_alpha_weights": {
+            "type": "categorical",
+            "choices": ["0.0,0.1,0.2,0.3"],
+        },
+        "gkg_tabpfn_n_estimators": {"type": "int", "low": 4, "high": 16},
+        "tabpfn_n_estimators": {"type": "int", "low": 4, "high": 16},
+        "tabpfn_softmax_temperature": {"type": "float", "low": 0.5, "high": 1.5},
+        "chain_variants_config": {"type": "categorical", "choices": ["config/chain_variants.yaml"]},
+    }
+    params = {
+        "tabular_model": "xgb",
+        "xgb_max_depth": 4,
+        "xgb_learning_rate": 0.05,
+        "use_blend": "true",
+        "use_gkg_change_detector": "false",
+        "use_gkg_change_gate": "true",
+        "use_gkg_change_alpha": "true",
+        "gkg_change_model": "logit",
+        "gkg_change_gate_thresholds": "0.0,0.3,0.4,0.5",
+        "gkg_change_alpha_weights": "0.0,0.1,0.2,0.3",
+        "gkg_tabpfn_n_estimators": 4,
+        "tabpfn_n_estimators": 8,
+        "tabpfn_softmax_temperature": 0.9,
+        "chain_variants_config": "config/chain_variants.yaml",
+    }
+    trial = _make_trial(params)
+    args = sweep_runner.build_trial_args(trial, search_space, "^GSPC", [])
+    args_str = " ".join(args)
+    # Gate/alpha force detector activation so trials do not die on invalid combinations.
+    assert "--use_gkg_change_detector" in args_str
+    assert "--use_gkg_change_gate" in args_str
+    assert "--use_gkg_change_alpha" in args_str
+    assert "--gkg_change_gate_thresholds 0.0,0.3,0.4,0.5" in args_str
+    assert "--gkg_change_alpha_weights 0.0,0.1,0.2,0.3" in args_str
+
+
 # ---------------------------------------------------------------------------
 # read_robust_score_from_mlflow
 # ---------------------------------------------------------------------------
@@ -172,7 +222,7 @@ def test_read_robust_score_returns_score():
     with patch("sweep_runner.mlflow") as mock_mlflow:
         mock_mlflow.search_runs.return_value = mock_runs
         score = sweep_runner.read_robust_score_from_mlflow(
-            "walk_forward_sweep", "^GSPC", 3, "sweep_GSPC_20260315"
+            "walk_fordward_sweep_adv", "^GSPC", 3, "sweep_GSPC_20260315"
         )
     assert score == pytest.approx(0.72)
 
@@ -181,7 +231,7 @@ def test_read_robust_score_returns_neg_inf_on_empty():
     with patch("sweep_runner.mlflow") as mock_mlflow:
         mock_mlflow.search_runs.return_value = pd.DataFrame()
         score = sweep_runner.read_robust_score_from_mlflow(
-            "walk_forward_sweep", "^GSPC", 3, "sweep_GSPC_20260315"
+            "walk_fordward_sweep_adv", "^GSPC", 3, "sweep_GSPC_20260315"
         )
     assert score == float("-inf")
 
@@ -191,6 +241,6 @@ def test_read_robust_score_returns_neg_inf_on_nan():
     with patch("sweep_runner.mlflow") as mock_mlflow:
         mock_mlflow.search_runs.return_value = mock_runs
         score = sweep_runner.read_robust_score_from_mlflow(
-            "walk_forward_sweep", "^GSPC", 3, "sweep_GSPC_20260315"
+            "walk_fordward_sweep_adv", "^GSPC", 3, "sweep_GSPC_20260315"
         )
     assert score == float("-inf")

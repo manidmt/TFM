@@ -108,8 +108,9 @@ def test_build_mlflow_parent_tags_has_required_keys():
     mod = _load_walk_forward_module()
     args = _make_args()
     tags = mod._build_mlflow_parent_tags(args, "abc1234", _make_sources_cfg())
-    for key in ("script", "component", "git_sha", "horizon", "tabular_model", "news_profile"):
+    for key in ("run_role", "script", "component", "git_sha", "horizon", "tabular_model", "news_profile"):
         assert key in tags, f"Missing tag: {key}"
+    assert tags["run_role"] == "parent_trial"
     assert tags["git_sha"] == "abc1234"
     assert tags["horizon"] == "5"
     assert tags["news_profile"] == "gkg_v1_light"
@@ -119,10 +120,21 @@ def test_build_mlflow_child_tags_has_required_keys():
     mod = _load_walk_forward_module()
     args = _make_args()
     tags = mod._build_mlflow_child_tags("GSPC", ("^GSPC",), args)
+    assert tags["run_role"] == "child_asset"
     assert tags["asset"] == "GSPC"
     assert tags["tickers"] == "^GSPC"
     assert tags["horizon"] == "5"
     assert tags["tabular_model"] == "xgb"
+
+
+def test_build_mlflow_run_names_include_trial_when_present():
+    mod = _load_walk_forward_module()
+    args = _make_args(asset="^GSPC", use_gkg_change_gate=True)
+    extra_tags = {"sweep_trial": "7", "optuna_study": "study_x"}
+    parent_name = mod._build_mlflow_parent_run_name(args, extra_tags)
+    child_name = mod._build_mlflow_child_run_name("^GSPC", args, extra_tags)
+    assert parent_name.startswith("trial=7__asset=^GSPC__parent__h5__xgb__")
+    assert child_name == "trial=7__asset=^GSPC__h5__xgb__gkg-gate"
 
 
 def test_build_mlflow_child_params_has_required_keys():
