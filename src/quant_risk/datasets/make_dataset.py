@@ -35,7 +35,7 @@ class DatasetConfig:
     features_table: str = "features_daily"
     labels_table: str = "labels_regime"
 
-    tickers: tuple[str, ...] = ("^GSPC", "BTC-USD", "TLT")
+    tickers: tuple[str, ...] = ()
     horizon: int = 20
 
     # split by date (time-series split)
@@ -122,29 +122,48 @@ def load_joined(cfg: DatasetConfig) -> pd.DataFrame:
     con = duckdb.connect(cfg.db_path, read_only=True)
     try:
         # features
-        df_feat = con.execute(
-            f"""
-            SELECT * FROM {cfg.features_table}
-            WHERE ticker IN ({",".join(["?"] * len(cfg.tickers))})
-            ORDER BY ticker, date
-            """,
-            list(cfg.tickers),
-        ).df()
+        if cfg.tickers:
+            df_feat = con.execute(
+                f"""
+                SELECT * FROM {cfg.features_table}
+                WHERE ticker IN ({",".join(["?"] * len(cfg.tickers))})
+                ORDER BY ticker, date
+                """,
+                list(cfg.tickers),
+            ).df()
+        else:
+            df_feat = con.execute(
+                f"""
+                SELECT * FROM {cfg.features_table}
+                ORDER BY ticker, date
+                """
+            ).df()
 
         if df_feat.empty:
             raise RuntimeError("features_daily empty for selected tickers.")
 
         # labels
-        df_lab = con.execute(
-            f"""
-            SELECT ticker, date, horizon, vol_fwd
-            FROM {cfg.labels_table}
-            WHERE horizon = ?
-            AND ticker IN ({",".join(["?"] * len(cfg.tickers))})
-            ORDER BY ticker, date
-            """,
-            [cfg.horizon, *cfg.tickers],
-        ).df()
+        if cfg.tickers:
+            df_lab = con.execute(
+                f"""
+                SELECT ticker, date, horizon, vol_fwd
+                FROM {cfg.labels_table}
+                WHERE horizon = ?
+                AND ticker IN ({",".join(["?"] * len(cfg.tickers))})
+                ORDER BY ticker, date
+                """,
+                [cfg.horizon, *cfg.tickers],
+            ).df()
+        else:
+            df_lab = con.execute(
+                f"""
+                SELECT ticker, date, horizon, vol_fwd
+                FROM {cfg.labels_table}
+                WHERE horizon = ?
+                ORDER BY ticker, date
+                """,
+                [cfg.horizon],
+            ).df()
 
         if df_lab.empty:
             raise RuntimeError("labels_regime empty for selected tickers/horizon.")

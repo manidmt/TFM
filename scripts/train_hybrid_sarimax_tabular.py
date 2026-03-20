@@ -18,7 +18,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import yaml
 import pandas as pd
 
 from sklearn.pipeline import Pipeline
@@ -26,13 +25,9 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 
+from quant_risk.config import load_yaml, resolve_tickers
 from quant_risk.datasets.make_dataset import DatasetConfig, build_xy, make_dataset
 from quant_risk.models.metrics import compute_metrics, per_class_accuracy
-
-
-def load_yaml(path: str) -> dict:
-    with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
 
 
 def ensure_dir(p: Path) -> None:
@@ -239,7 +234,7 @@ def main() -> int:
     arg_parser.add_argument("--config_features", default="config/features.yaml")
     arg_parser.add_argument("--config_sources", default="config/datasources.yaml")
     arg_parser.add_argument("--horizon", type=int, default=20, choices=[5, 20])
-    arg_parser.add_argument("--tickers", nargs="+", default=["^GSPC", "BTC-USD", "TLT"])
+    arg_parser.add_argument("--tickers", nargs="+", default=None)
     arg_parser.add_argument("--pooled", action="store_true")
 
     arg_parser.add_argument("--preset", default=None)
@@ -268,6 +263,7 @@ def main() -> int:
     features_config_dict = load_yaml(parsed_args.config_features)
     sources_config_dict = load_yaml(parsed_args.config_sources)
     database_path = sources_config_dict["db"]["path"]
+    tickers = resolve_tickers(parsed_args.tickers, parsed_args.config_sources)
 
     output_root = Path(parsed_args.outdir) / f"h{parsed_args.horizon}"
     ensure_dir(output_root)
@@ -276,7 +272,7 @@ def main() -> int:
 
     base_kwargs = dict(
         db_path=database_path,
-        tickers=tuple(parsed_args.tickers),
+        tickers=tickers,
         horizon=parsed_args.horizon,
         pooled=bool(parsed_args.pooled),
         train_end=features_config_dict["split"]["train_end"],
@@ -310,7 +306,7 @@ def main() -> int:
                 "variant": variant_name,
                 "dataset": {
                     "db_path": database_path,
-                    "tickers": list(parsed_args.tickers),
+                    "tickers": list(tickers),
                     "horizon": int(parsed_args.horizon),
                     "pooled": bool(parsed_args.pooled),
                     "train_end": features_config_dict["split"]["train_end"],

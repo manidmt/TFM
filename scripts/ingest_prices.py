@@ -45,6 +45,7 @@ def main() -> int:
         default_start=cfg["prices"].get("default_start", "2010-01-01"),
         auto_adjust=bool(cfg["prices"].get("auto_adjust", True)),
         lookback_buffer_days=int(cfg["prices"].get("lookback_buffer_days", 5)),
+        timeout_seconds=int(cfg["prices"].get("timeout_seconds", 30)),
     )
 
     res = refresh_prices(ingest_cfg, tickers=tickers, end=args.end)

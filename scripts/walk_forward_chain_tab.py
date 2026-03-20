@@ -27,6 +27,7 @@ from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import brier_score_loss, roc_auc_score
 
+from quant_risk.config import resolve_tickers
 from quant_risk.datasets.make_dataset import DatasetConfig, make_dataset
 from quant_risk.models.baseline import persistence_pred_from_regime
 from quant_risk.models.metrics import compute_metrics
@@ -2821,7 +2822,7 @@ def main() -> int:
         choices=["xgb", "tabpfn"],
         help="Tabular classifier used after SARIMAX->GARCH chain.",
     )
-    parser.add_argument("--tickers", nargs="+", default=["^GSPC", "BTC-USD", "TLT"])
+    parser.add_argument("--tickers", nargs="+", default=None)
     parser.add_argument("--asset", default=None, help="Run only for a single asset/ticker.")
     parser.add_argument("--min_train_end", default="2018-12-31")
     parser.add_argument("--max_valid_end", default="2023-12-31")
@@ -3091,7 +3092,7 @@ def main() -> int:
     sources_cfg = load_yaml(args.config_sources)
     db_path = sources_cfg["db"]["path"]
     regime_bins = int(features_cfg["targets"]["regime_bins"])
-    tickers = tuple(args.tickers)
+    tickers = resolve_tickers(args.tickers, args.config_sources)
     if args.asset:
         tickers = (str(args.asset),)
 

@@ -9,8 +9,16 @@
 '''
 
 import duckdb
+from pathlib import Path
+
+from quant_risk.config import load_price_tickers
 
 DB = "data/db/financial_data.duckdb"
+CFG = Path(__file__).resolve().parents[1] / "config" / "datasources.yaml"
+
+
+def _configured_tickers() -> set[str]:
+    return {str(t).strip() for t in load_price_tickers(CFG) if str(t).strip()}
 
 
 
@@ -39,7 +47,7 @@ def test_raw_prices_has_expected_tickers_and_nonzero_rows():
         assert n > 0, "raw_prices is empty."
 
         tickers = [r[0] for r in con.execute("SELECT DISTINCT ticker FROM raw_prices").fetchall()]
-        expected = {"^GSPC", "TLT", "BTC-USD"}
+        expected = _configured_tickers()
         missing = expected - set(tickers)
         assert not missing, f"Missing tickers in raw_prices: {missing}"
     finally:
@@ -56,7 +64,7 @@ def test_raw_prices_date_ranges_are_sane():
             ORDER BY ticker
         """).fetchall()
 
-        assert len(rows) >= 3
+        assert len(rows) >= len(_configured_tickers())
 
         for ticker, min_d, max_d, n in rows:
             assert n > 100, f"{ticker}: too few rows ({n})."

@@ -12,8 +12,8 @@
 from __future__ import annotations
 
 import argparse
-from struct import pack
 
+from quant_risk.config import resolve_tickers
 from quant_risk.datasets.make_dataset import DatasetConfig, make_dataset, build_xy
 from quant_risk.models.baseline import make_models
 from quant_risk.models.metrics import compute_metrics, per_class_accuracy
@@ -33,16 +33,18 @@ def print_model_metrics(name: str, metrics_valid, metrics_test) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", default="data/db/financial_data.duckdb")
+    ap.add_argument("--config_sources", default="config/datasources.yaml")
     ap.add_argument("--horizon", type=int, default=20, choices=[5, 20])
-    ap.add_argument("--tickers", nargs="+", default=["^GSPC", "BTC-USD", "TLT"])
+    ap.add_argument("--tickers", nargs="+", default=None)
     ap.add_argument("--pooled", action="store_true")
     ap.add_argument("--train_end", default=None)
     ap.add_argument("--valid_end", default=None)
     args = ap.parse_args()
+    tickers = resolve_tickers(args.tickers, args.config_sources)
 
     cfg = DatasetConfig(
         db_path=args.db,
-        tickers=tuple(args.tickers),
+        tickers=tickers,
         horizon=args.horizon,
         pooled=bool(args.pooled),
         train_end=args.train_end,
