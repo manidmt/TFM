@@ -4,8 +4,11 @@ db:
 prices:
   tickers:
     - "^GSPC"
+    - "^STOXX50E"
     - "BTC-USD"
     - "TLT"
+    - "SHY"
+    - "GLD"
   default_start: "2010-01-01"
   auto_adjust: true
   lookback_buffer_days: 5
