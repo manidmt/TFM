@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Iterable
+import itertools
 import re
 
 import duckdb
@@ -101,6 +102,14 @@ def _sanitize_query_id(query_id: str) -> str:
     """
     s = re.sub(r"[^a-zA-Z0-9]+", "_", str(query_id).strip().lower()).strip("_")
     return s or "default"
+
+
+def _sanitize_ticker_id(ticker: str) -> str:
+    """
+    Convert ticker symbols into safe lowercase feature-name tokens.
+    """
+    s = re.sub(r"[^a-zA-Z0-9]+", "_", str(ticker).strip().lower()).strip("_")
+    return s or "asset"
 
 
 def _load_news_block(
@@ -567,18 +576,52 @@ def build_features(cfg: BuildFeaturesConfig, tickers: Iterable[str]) -> dict:
         wide_rv20 = out.pivot(index="date", columns="ticker", values="rv_20").sort_index()
 
         cross = pd.DataFrame(index=wide_logret.index)
-        if "^GSPC" in wide_logret.columns and "BTC-USD" in wide_logret.columns:
-            cross[f"corr_{cfg.cross_corr_window}_spx_btc"] = (
-                wide_logret["^GSPC"]
-                .rolling(cfg.cross_corr_window)
-                .corr(wide_logret["BTC-USD"])
+        available_tickers = sorted(
+            set(wide_logret.columns.astype(str)).intersection(wide_rv20.columns.astype(str)),
+            key=_sanitize_ticker_id,
+        )
+        for left, right in itertools.combinations(available_tickers, 2):
+            left_id = _sanitize_ticker_id(left)
+            right_id = _sanitize_ticker_id(right)
+            pair_suffix = f"{left_id}_{right_id}"
+
+            cross[f"corr_{cfg.cross_corr_window}_{pair_suffix}"] = (
+                wide_logret[left].rolling(cfg.cross_corr_window).corr(wide_logret[right])
             )
-        if "^GSPC" in wide_rv20.columns and "TLT" in wide_rv20.columns:
-            cross["rv_spx_minus_tlt"] = wide_rv20["^GSPC"] - wide_rv20["TLT"]
-            cross["risk_off_proxy_spx_tlt"] = (wide_rv20["^GSPC"] > wide_rv20["TLT"]).astype(float)
-        if "BTC-USD" in wide_rv20.columns and "^GSPC" in wide_rv20.columns:
-            cross["rv_btc_minus_spx"] = wide_rv20["BTC-USD"] - wide_rv20["^GSPC"]
-            cross["risk_on_proxy_btc_spx"] = (wide_rv20["BTC-USD"] < wide_rv20["^GSPC"]).astype(float)
+            cross[f"rv20_diff_{pair_suffix}"] = wide_rv20[left] - wide_rv20[right]
+            denom = wide_rv20[right].replace(0.0, np.nan)
+            cross[f"rv20_ratio_{pair_suffix}"] = wide_rv20[left] / denom
+            cross[f"rv20_gt_{pair_suffix}"] = (wide_rv20[left] > wide_rv20[right]).astype(float)
+
+        # Backward-compatible aliases for the original hand-crafted pairs.
+        for corr_alias in ("corr_20_gspc_btc_usd", "corr_20_btc_usd_gspc"):
+            if corr_alias in cross.columns and cfg.cross_corr_window == 20:
+                cross["corr_20_spx_btc"] = cross[corr_alias]
+                break
+        for diff_alias, gt_alias in (
+            ("rv20_diff_gspc_tlt", "rv20_gt_gspc_tlt"),
+            ("rv20_diff_tlt_gspc", "rv20_gt_tlt_gspc"),
+        ):
+            if diff_alias in cross.columns:
+                if diff_alias == "rv20_diff_tlt_gspc":
+                    cross["rv_spx_minus_tlt"] = -cross[diff_alias]
+                    cross["risk_off_proxy_spx_tlt"] = 1.0 - cross[gt_alias]
+                else:
+                    cross["rv_spx_minus_tlt"] = cross[diff_alias]
+                    cross["risk_off_proxy_spx_tlt"] = cross[gt_alias]
+                break
+        for diff_alias, gt_alias in (
+            ("rv20_diff_btc_usd_gspc", "rv20_gt_btc_usd_gspc"),
+            ("rv20_diff_gspc_btc_usd", "rv20_gt_gspc_btc_usd"),
+        ):
+            if diff_alias in cross.columns:
+                if diff_alias == "rv20_diff_gspc_btc_usd":
+                    cross["rv_btc_minus_spx"] = -cross[diff_alias]
+                    cross["risk_on_proxy_btc_spx"] = cross[gt_alias]
+                else:
+                    cross["rv_btc_minus_spx"] = cross[diff_alias]
+                    cross["risk_on_proxy_btc_spx"] = 1.0 - cross[gt_alias]
+                break
 
         cross = cross.reset_index()
         out = out.merge(cross, on="date", how="left")
