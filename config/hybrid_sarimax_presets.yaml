@@ -8,7 +8,6 @@ presets:
     config_features: "config/features.yaml"
     config_sources: "config/datasources.yaml"
     horizon: 20
-    tickers: ["^GSPC", "BTC-USD", "TLT"]
     pooled: false
     sarimax_variants: "none,nl"
     net_liquidity_col: "net_liquidity_diff"
@@ -26,7 +25,6 @@ presets:
     config_features: "config/features.yaml"
     config_sources: "config/datasources.yaml"
     horizon: 20
-    tickers: ["^GSPC", "BTC-USD", "TLT"]
     pooled: false
     sarimax_variants: "none,nl,exog:net_liquidity_diff|rv_5"
     net_liquidity_col: "net_liquidity_diff"
@@ -44,7 +42,6 @@ presets:
     config_features: "config/features.yaml"
     config_sources: "config/datasources.yaml"
     horizon: 5
-    tickers: ["^GSPC", "BTC-USD", "TLT"]
     pooled: false
     sarimax_variants: "none,nl"
     net_liquidity_col: "net_liquidity_diff"

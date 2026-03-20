@@ -26,6 +26,7 @@ class PriceIngestConfig:
     lookback_buffer_days: int = 5
     default_start: str = "2010-01-01"
     auto_adjust: bool = True
+    timeout_seconds: int = 30
 
 
 def connect(db_path: str) -> duckdb.DuckDBPyConnection:
@@ -61,7 +62,13 @@ def get_last_dates(con: duckdb.DuckDBPyConnection, table: str) -> dict[str, date
     return out
 
 
-def download_ohlcv(tickers: Iterable[str], start: str, end: Optional[str], auto_adjust: bool) -> pd.DataFrame:
+def download_ohlcv(
+    tickers: Iterable[str],
+    start: str,
+    end: Optional[str],
+    auto_adjust: bool,
+    timeout_seconds: int = 30,
+) -> pd.DataFrame:
     """
     Download OHLCV for tickers using yfinance.
     Returns a DataFrame with columns: ticker, date, open, high, low, close, volume
@@ -74,6 +81,7 @@ def download_ohlcv(tickers: Iterable[str], start: str, end: Optional[str], auto_
         auto_adjust=auto_adjust,
         progress=False,
         threads=True,
+        timeout=timeout_seconds,
     )
     if df is None or df.empty:
         return pd.DataFrame(columns=["ticker", "date", "open", "high", "low", "close", "volume"])
@@ -149,7 +157,19 @@ def refresh_prices(cfg: PriceIngestConfig, tickers: list[str], end: Optional[str
                 start_date = cfg.default_start
 
             try:
-                df = download_ohlcv([t], start=start_date, end=end, auto_adjust=cfg.auto_adjust)
+                df = download_ohlcv(
+                    [t],
+                    start=start_date,
+                    end=end,
+                    auto_adjust=cfg.auto_adjust,
+                    timeout_seconds=cfg.timeout_seconds,
+                )
+                if df.empty:
+                    errors[t] = (
+                        "Empty download result from yfinance "
+                        f"(start={start_date}, end={end or 'today'})."
+                    )
+                    continue
                 inserted += upsert_prices(con, cfg.table, df, source="yfinance")
             except Exception as e:
                 errors[t] = str(e)

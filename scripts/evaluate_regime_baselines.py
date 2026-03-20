@@ -17,8 +17,8 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-import yaml
 
+from quant_risk.config import load_yaml, resolve_tickers
 from quant_risk.datasets.make_dataset import DatasetConfig, build_xy, make_dataset
 from quant_risk.models.baseline import (
     majority_class,
@@ -33,13 +33,6 @@ from quant_risk.models.tabular.xgb import (
     predict as predict_xgb,
     predict_proba as predict_proba_xgb,
 )
-
-
-def load_yaml(path: str) -> dict[str, Any]:
-    with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
-
-
 def _base_cfg(
     db_path: str,
     tickers: tuple[str, ...],
@@ -416,7 +409,7 @@ def main() -> int:
     parser.add_argument("--config_features", default="config/features.yaml")
     parser.add_argument("--config_sources", default="config/datasources.yaml")
     parser.add_argument("--horizons", nargs="+", type=int, default=[5, 20])
-    parser.add_argument("--tickers", nargs="+", default=["^GSPC", "BTC-USD", "TLT"])
+    parser.add_argument("--tickers", nargs="+", default=None)
     parser.add_argument("--pooled", action="store_true")
     parser.add_argument(
         "--walkforward_root",
@@ -430,6 +423,7 @@ def main() -> int:
     features_cfg = load_yaml(args.config_features)
     sources_cfg = load_yaml(args.config_sources)
     db_path = sources_cfg["db"]["path"]
+    tickers = resolve_tickers(args.tickers, args.config_sources)
     train_end = features_cfg["split"]["train_end"]
     valid_end = features_cfg["split"]["val_end"]
     regime_bins = int(features_cfg["targets"]["regime_bins"])
@@ -441,7 +435,7 @@ def main() -> int:
         print(f"\n[run] horizon={horizon}")
         base_cfg = _base_cfg(
             db_path=db_path,
-            tickers=tuple(args.tickers),
+            tickers=tickers,
             horizon=int(horizon),
             train_end=train_end,
             valid_end=valid_end,
@@ -467,7 +461,7 @@ def main() -> int:
         all_metrics.extend(_eval_rf_model("GARCH_plus_RF", garch_pack, horizon))
 
         if args.walkforward_root:
-            if len(args.tickers) != 1:
+            if len(tickers) != 1:
                 raise ValueError(
                     "--walkforward_root requires single-ticker execution (use --tickers <asset>)."
                 )
@@ -475,7 +469,7 @@ def main() -> int:
                 _eval_best_chain_from_walkforward(
                     base_cfg=base_cfg,
                     horizon=int(horizon),
-                    asset=str(args.tickers[0]),
+                    asset=str(tickers[0]),
                     walkforward_root=str(args.walkforward_root),
                     xgb_n_jobs=int(args.xgb_n_jobs),
                 )
@@ -501,7 +495,7 @@ def main() -> int:
         "config": {
             "db_path": db_path,
             "horizons": [int(h) for h in args.horizons],
-            "tickers": list(args.tickers),
+            "tickers": list(tickers),
             "pooled": bool(args.pooled),
             "train_end": train_end,
             "valid_end": valid_end,
