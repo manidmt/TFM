@@ -16,17 +16,12 @@ import json
 from pathlib import Path
 
 import pandas as pd
-import yaml
 
+from quant_risk.config import load_yaml, resolve_tickers
 from quant_risk.datasets.make_dataset import DatasetConfig, build_xy, make_dataset
 from quant_risk.models.metrics import compute_metrics, per_class_accuracy
 from quant_risk.models.tabular.common import build_variant_name, set_global_seed
 from quant_risk.models.tabular.tabnet import TabNetConfig, fit, make_model, predict
-
-
-def load_yaml(path: str) -> dict:
-    with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
 
 
 def ensure_dir(p: Path) -> None:
@@ -76,7 +71,7 @@ def main() -> int:
     parser.add_argument("--config_features", default="config/features.yaml")
     parser.add_argument("--config_sources", default="config/datasources.yaml")
     parser.add_argument("--horizon", type=int, default=20, choices=[5, 20])
-    parser.add_argument("--tickers", nargs="+", default=["^GSPC", "BTC-USD", "TLT"])
+    parser.add_argument("--tickers", nargs="+", default=None)
     parser.add_argument("--pooled", action="store_true")
     parser.add_argument("--use_sarimax", action="store_true")
     parser.add_argument("--use_garch", action="store_true")
@@ -97,6 +92,7 @@ def main() -> int:
     features_cfg = load_yaml(args.config_features)
     sources_cfg = load_yaml(args.config_sources)
     db_path = sources_cfg["db"]["path"]
+    tickers = resolve_tickers(args.tickers, args.config_sources)
     train_end = features_cfg["split"]["train_end"]
     valid_end = features_cfg["split"]["val_end"]
     regime_bins = int(features_cfg["targets"]["regime_bins"])
@@ -113,7 +109,7 @@ def main() -> int:
 
     dataset_cfg = DatasetConfig(
         db_path=db_path,
-        tickers=tuple(args.tickers),
+        tickers=tickers,
         horizon=args.horizon,
         pooled=bool(args.pooled),
         train_end=train_end,
@@ -165,7 +161,7 @@ def main() -> int:
         "variant": variant_name,
         "dataset": {
             "db_path": db_path,
-            "tickers": list(args.tickers),
+            "tickers": list(tickers),
             "horizon": int(args.horizon),
             "pooled": bool(args.pooled),
             "train_end": train_end,

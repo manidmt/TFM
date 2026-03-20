@@ -17,19 +17,14 @@ import json
 from pathlib import Path
 from typing import Any
 
-import yaml
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
+from quant_risk.config import load_yaml, resolve_tickers
 from quant_risk.datasets.make_dataset import DatasetConfig, build_xy, make_dataset
 from quant_risk.models.metrics import compute_metrics
-
-
-def load_yaml(path: str) -> dict:
-    with open(path, "r", encoding="utf-8") as file_obj:
-        return yaml.safe_load(file_obj)
 
 
 def save_json(path: Path, payload: dict) -> None:
@@ -199,7 +194,7 @@ def main() -> int:
     parser.add_argument("--config_features", default="config/features.yaml")
     parser.add_argument("--config_sources", default="config/datasources.yaml")
     parser.add_argument("--horizons", nargs="+", type=int, default=[5, 20])
-    parser.add_argument("--tickers", nargs="+", default=["^GSPC", "BTC-USD", "TLT"])
+    parser.add_argument("--tickers", nargs="+", default=None)
     parser.add_argument("--pooled", action="store_true")
     parser.add_argument("--objective", choices=["valid_macro_f1", "valid_acc"], default="valid_macro_f1")
     parser.add_argument("--out_json", default="runs/best_hybrid_experiments.json")
@@ -231,6 +226,7 @@ def main() -> int:
     features_cfg = load_yaml(args.config_features)
     sources_cfg = load_yaml(args.config_sources)
     db_path = sources_cfg["db"]["path"]
+    tickers = resolve_tickers(args.tickers, args.config_sources)
 
     defaults = {
         "rf_estimators": args.rf_estimators,
@@ -265,7 +261,7 @@ def main() -> int:
         horizon_key = str(horizon)
         result_payload["best_by_horizon"][horizon_key] = {}
 
-        for ticker in args.tickers:
+        for ticker in tickers:
             print(f"\n[run] Evaluating ticker={ticker} horizon={horizon}")
 
             best_record: dict[str, Any] | None = None
