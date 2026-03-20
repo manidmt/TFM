@@ -11,22 +11,17 @@
 import duckdb
 import pandas as pd
 import numpy as np
-import yaml
+from pathlib import Path
 
+from quant_risk.config import load_price_tickers
 from quant_risk.features.build import BuildFeaturesConfig, build_features
 
 DB = "data/db/financial_data.duckdb"
-CFG = "config/datasources.yaml"
+CFG = Path(__file__).resolve().parents[1] / "config" / "datasources.yaml"
 
 
 def _configured_tickers() -> set[str]:
-    with open(CFG, "r", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f)
-    return {
-        str(t).strip()
-        for t in cfg.get("prices", {}).get("tickers", [])
-        if str(t).strip()
-    }
+    return {str(t).strip() for t in load_price_tickers(CFG) if str(t).strip()}
 
 def test_features_table_exists_and_has_rows():
     con = duckdb.connect(DB)

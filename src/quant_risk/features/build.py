@@ -605,10 +605,13 @@ def build_features(cfg: BuildFeaturesConfig, tickers: Iterable[str]) -> dict:
             if diff_alias in cross.columns:
                 if diff_alias == "rv20_diff_tlt_gspc":
                     cross["rv_spx_minus_tlt"] = -cross[diff_alias]
-                    cross["risk_off_proxy_spx_tlt"] = 1.0 - cross[gt_alias]
                 else:
                     cross["rv_spx_minus_tlt"] = cross[diff_alias]
-                    cross["risk_off_proxy_spx_tlt"] = cross[gt_alias]
+                cross["risk_off_proxy_spx_tlt"] = np.where(
+                    cross["rv_spx_minus_tlt"].isna(),
+                    np.nan,
+                    (cross["rv_spx_minus_tlt"] > 0.0).astype(float),
+                )
                 break
         for diff_alias, gt_alias in (
             ("rv20_diff_btc_usd_gspc", "rv20_gt_btc_usd_gspc"),
@@ -617,10 +620,13 @@ def build_features(cfg: BuildFeaturesConfig, tickers: Iterable[str]) -> dict:
             if diff_alias in cross.columns:
                 if diff_alias == "rv20_diff_gspc_btc_usd":
                     cross["rv_btc_minus_spx"] = -cross[diff_alias]
-                    cross["risk_on_proxy_btc_spx"] = cross[gt_alias]
                 else:
                     cross["rv_btc_minus_spx"] = cross[diff_alias]
-                    cross["risk_on_proxy_btc_spx"] = 1.0 - cross[gt_alias]
+                cross["risk_on_proxy_btc_spx"] = np.where(
+                    cross["rv_btc_minus_spx"].isna(),
+                    np.nan,
+                    (cross["rv_btc_minus_spx"] < 0.0).astype(float),
+                )
                 break
 
         cross = cross.reset_index()

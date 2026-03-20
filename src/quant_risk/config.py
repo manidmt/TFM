@@ -1,6 +1,12 @@
-"""
-Project configuration helpers shared across CLI entrypoints.
-"""
+'''
+@author: Manuel Díaz-Meco Terrés
+
+@email: manidmt5@gmail.com
+
+@date: 2026-03-20
+
+@description: Shared helpers to resolve project configuration from YAML files.
+'''
 
 from __future__ import annotations
 

@@ -1,6 +1,12 @@
-"""
-Tests for price fetching helpers.
-"""
+'''
+@author: Manuel Díaz-Meco Terrés
+
+@email: manidmt5@gmail.com
+
+@date: 2026-03-20
+
+@description: Tests for price fetching helpers.
+'''
 
 from __future__ import annotations
 
