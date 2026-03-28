@@ -1,0 +1,85 @@
+sweep:
+  n_trials: 30
+  mlflow_experiment: "walk_fordward_sweep_adv_h5"
+  assets:
+    - "^GSPC"
+    - "BTC-USD"
+    - "TLT"
+    - "GLD"
+    - "^STOXX50E"
+    - "SHY"
+  base_args:
+    - "--horizon"
+    - "5"
+    - "--step_months"
+    - "12"
+
+search_space:
+  # Discrete structural choices
+  chain_variants_config:
+    type: categorical
+    choices:
+      - src/quant_risk/models/econometric/chain_variants.yaml
+      - src/quant_risk/models/econometric/chain_variants_egarch.yaml
+      - src/quant_risk/models/econometric/chain_variants_gjrgarch.yaml
+      - src/quant_risk/models/econometric/chain_variants_har.yaml
+
+  tabular_model:
+    type: categorical
+    choices: [xgb, tabpfn]
+
+  use_gkg_change_detector:
+    type: categorical
+    choices: ["true", "false"]
+
+  use_gkg_change_gate:
+    type: categorical
+    choices: ["false", "true"]
+
+  use_gkg_change_alpha:
+    type: categorical
+    choices: ["false", "true"]
+
+  gkg_change_model:
+    type: categorical
+    choices: [logit, xgb]
+
+  gkg_change_gate_thresholds:
+    type: categorical
+    choices:
+      - "0.30,0.50"
+      - "0.40,0.60"
+
+  gkg_change_alpha_weights:
+    type: categorical
+    choices:
+      - "0.25,0.50"
+      - "0.50,0.75"
+
+  # TabPFN hyperparams — passed to CLI only when tabular_model=tabpfn
+  tabpfn_n_estimators:
+    type: int
+    low: 4
+    high: 16
+
+  tabpfn_softmax_temperature:
+    type: float
+    low: 0.5
+    high: 1.5
+
+  # XGB hyperparams — passed to CLI only when tabular_model=xgb
+  xgb_max_depth:
+    type: int
+    low: 3
+    high: 8
+
+  xgb_learning_rate:
+    type: float
+    low: 0.01
+    high: 0.2
+    log: true
+
+  # Blending — store_true flag: "true" appends --use_blend, "false" omits it
+  use_blend:
+    type: categorical
+    choices: ["true", "false"]

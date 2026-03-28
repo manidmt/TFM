@@ -22,6 +22,9 @@ arch = "^7.0.0"
 torch = "^2.2.0"
 torchsde = "^0.2.6"
 
+# --- Tracking ---
+mlflow = "^2.13"
+
 # --- App ---
 streamlit = "^1.31.0"
 plotly = "^5.18.0"
@@ -30,6 +33,7 @@ pandas-datareader = "^0.10.0"
 xgboost = "^3.2.0"
 pytorch-tabnet = "^4.1.0"
 tabpfn = "^6.4.1"
+optuna = "^4.7.0"
 
 [tool.poetry.group.dev.dependencies]
 jupyterlab = "^4.1.0"

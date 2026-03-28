@@ -39,7 +39,7 @@ _GKG_ROLL_RE = re.compile(
 
 @dataclass(frozen=True)
 class GkgChangeDetectorConfig:
-    model_type: str = "logit"  # logit | xgb | tabpfn(placeholder)
+    model_type: str = "logit"  # logit | xgb | tabpfn
     calibration_method: str = "none"  # none | platt | isotonic
     random_state: int = 42
     seed: int = 42
@@ -52,6 +52,10 @@ class GkgChangeDetectorConfig:
     xgb_min_child_weight: float = 1.0
     xgb_reg_lambda: float = 1.0
     xgb_n_jobs: int = 1
+    # TabPFN params (used only when model_type=tabpfn)
+    tabpfn_n_estimators: int = 8
+    tabpfn_softmax_temperature: float = 0.9
+    tabpfn_balance_probabilities: bool = False
 
 
 @dataclass(frozen=True)
@@ -121,10 +125,21 @@ def make_model(cfg: GkgChangeDetectorConfig):
             n_jobs=int(cfg.xgb_n_jobs),
             eval_metric="logloss",
             random_state=int(cfg.random_state),
+            device="cpu",
         )
     if model_type == "tabpfn":
-        raise NotImplementedError(
-            "model_type='tabpfn' is reserved for future extension in the change detector."
+        try:
+            from tabpfn import TabPFNClassifier
+        except ImportError as e:
+            raise ImportError(
+                "tabpfn no está instalado. Instala con: poetry add tabpfn"
+            ) from e
+        set_global_seed(cfg.seed, use_torch=True)
+        return TabPFNClassifier(
+            n_estimators=cfg.tabpfn_n_estimators,
+            softmax_temperature=cfg.tabpfn_softmax_temperature,
+            balance_probabilities=cfg.tabpfn_balance_probabilities,
+            random_state=int(cfg.random_state),
         )
     raise ValueError(f"Invalid GKG change detector model_type={cfg.model_type!r}")
 
@@ -206,12 +221,15 @@ def fit(
 
     model = make_model(cfg)
     model.fit(x, y)
-    p_train = predict_proba_change(model, x)
-    calibrator = _fit_binary_calibrator(
-        p_change=p_train,
-        y_true=y,
-        method=str(cfg.calibration_method),
-    )
+    if str(cfg.model_type).lower().strip() == "tabpfn":
+        calibrator: dict = {"method": "none", "model": None}
+    else:
+        p_train = predict_proba_change(model, x)
+        calibrator = _fit_binary_calibrator(
+            p_change=p_train,
+            y_true=y,
+            method=str(cfg.calibration_method),
+        )
     return GkgChangeDetectorArtifacts(
         model=model,
         model_type=str(cfg.model_type).lower().strip(),
