@@ -1,6 +1,6 @@
 sweep:
   n_trials: 30
-  mlflow_experiment: "walk_fordward_sweep_adv"
+  mlflow_experiment: "walk_fordward_sweep_adv_h5"
   assets:
     - "^GSPC"
     - "BTC-USD"
@@ -8,6 +8,11 @@ sweep:
     - "GLD"
     - "^STOXX50E"
     - "SHY"
+  base_args:
+    - "--horizon"
+    - "5"
+    - "--step_months"
+    - "12"
 
 search_space:
   # Discrete structural choices

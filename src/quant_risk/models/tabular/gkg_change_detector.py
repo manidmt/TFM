@@ -125,6 +125,7 @@ def make_model(cfg: GkgChangeDetectorConfig):
             n_jobs=int(cfg.xgb_n_jobs),
             eval_metric="logloss",
             random_state=int(cfg.random_state),
+            device="cpu",
         )
     if model_type == "tabpfn":
         try:

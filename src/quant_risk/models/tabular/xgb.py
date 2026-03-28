@@ -57,6 +57,7 @@ def make_model(cfg: XGBConfig):
         n_jobs=cfg.n_jobs,
         random_state=cfg.random_state,
         eval_metric=cfg.eval_metric,
+        device="cpu",
     )
     model._quant_risk_cfg = cfg
     return model

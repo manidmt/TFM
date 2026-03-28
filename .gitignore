@@ -51,6 +51,15 @@ config.yaml
 # Runs
 /runs/
 .model_locks/
+/mlruns/
+optuna_studies*.db
+
+# Model checkpoints
+*.ckpt
+
+# Claude Code tooling
+.agents/
+skills-lock.json
 
 # Reports
 /reports/

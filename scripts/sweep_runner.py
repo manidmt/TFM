@@ -4,6 +4,18 @@ Experiment sweep runner using Optuna + MLflow.
 Usage:
     poetry run python scripts/sweep_runner.py --config config/sweep_config.yaml
     poetry run python scripts/sweep_runner.py --config config/sweep_config.yaml --n_trials 2 --assets "^GSPC"
+
+Resume an interrupted sweep (study persisted in SQLite):
+    poetry run python scripts/sweep_runner.py \\
+        --config config/sweep_config.yaml \\
+        --study_storage sqlite:///optuna_studies.db \\
+        --resume
+
+Warm-start h5 sweep from h20 best params:
+    poetry run python scripts/sweep_runner.py \\
+        --config config/sweep_config.yaml \\
+        --study_storage sqlite:///optuna_studies_h5.db \\
+        --enqueue_best_from walk_fordward_sweep_adv
 """
 from __future__ import annotations
 
@@ -12,7 +24,6 @@ import json
 import math
 import os
 import subprocess
-import sys
 import tempfile
 import warnings
 from datetime import datetime
@@ -149,6 +160,75 @@ def read_robust_score_from_mlflow(
     return float(score)
 
 
+def get_best_params_from_experiment(experiment_name: str, asset: str) -> dict[str, Any] | None:
+    """Query MLflow for the best sweep_summary params for *asset* in *experiment_name*.
+
+    Returns the best_params dict logged by log_sweep_summary, or None if not found.
+    The params are stored as MLflow params (string values); we return them as-is so
+    study.enqueue_trial() can coerce them to the right types via the search_space.
+    """
+    try:
+        runs = mlflow.search_runs(
+            experiment_names=[experiment_name],
+            filter_string=(
+                f"tags.asset = '{asset}' "
+                f"AND tags.run_role = 'sweep_summary'"
+            ),
+            order_by=["metrics.best_robust_score DESC"],
+            max_results=1,
+        )
+    except Exception as exc:
+        warnings.warn(f"[sweep] enqueue_best_from: MLflow query failed for asset={asset}: {exc}")
+        return None
+
+    if runs.empty:
+        warnings.warn(
+            f"[sweep] enqueue_best_from: no sweep_summary run found for asset={asset} "
+            f"in experiment '{experiment_name}'"
+        )
+        return None
+
+    row = runs.iloc[0]
+    params: dict[str, Any] = {}
+    for col in row.index:
+        if col.startswith("params."):
+            key = col[len("params."):]
+            val = row[col]
+            if val is not None and str(val) not in ("nan", "None", ""):
+                params[key] = val
+
+    if not params:
+        warnings.warn(
+            f"[sweep] enqueue_best_from: sweep_summary found for asset={asset} but has no params"
+        )
+        return None
+
+    return params
+
+
+def _coerce_enqueued_params(
+    raw: dict[str, Any],
+    search_space: dict[str, Any],
+) -> dict[str, Any]:
+    """Cast string param values from MLflow back to the types Optuna expects."""
+    out: dict[str, Any] = {}
+    for name, val in raw.items():
+        if name not in search_space:
+            continue  # unknown param; skip silently
+        spec = search_space[name]
+        t = spec["type"]
+        try:
+            if t == "int":
+                out[name] = int(float(str(val)))
+            elif t == "float":
+                out[name] = float(str(val))
+            else:  # categorical — keep as string
+                out[name] = str(val)
+        except (TypeError, ValueError):
+            out[name] = val  # leave as-is; Optuna will validate
+    return out
+
+
 def make_objective(
     asset: str,
     search_space: dict[str, Any],
@@ -243,7 +323,36 @@ def main() -> None:
     parser.add_argument("--n_trials", type=int, default=None, help="Override n_trials from config")
     parser.add_argument("--assets", nargs="+", default=None, help="Override assets from config")
     parser.add_argument("--sweep_strict", action="store_true", help="Abort on any trial failure")
+    parser.add_argument(
+        "--study_storage",
+        default=None,
+        help=(
+            "Optuna storage URL for persisting studies (e.g. sqlite:///optuna_studies.db). "
+            "Required for --resume."
+        ),
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "Resume existing studies: uses stable study names (no timestamp) and "
+            "load_if_exists=True. Requires --study_storage."
+        ),
+    )
+    parser.add_argument(
+        "--enqueue_best_from",
+        default=None,
+        metavar="EXPERIMENT",
+        help=(
+            "MLflow experiment name to warm-start from. For each asset, the best "
+            "structural params logged by a previous sweep in that experiment are "
+            "enqueued as the first trial of the new study."
+        ),
+    )
     args = parser.parse_args()
+
+    if args.resume and not args.study_storage:
+        parser.error("--resume requires --study_storage (e.g. sqlite:///optuna_studies.db)")
 
     cfg = load_sweep_config(args.config)
     sweep_cfg = cfg["sweep"]
@@ -252,27 +361,74 @@ def main() -> None:
     n_trials = args.n_trials if args.n_trials is not None else int(sweep_cfg["n_trials"])
     assets = args.assets if args.assets is not None else list(sweep_cfg["assets"])
     experiment_name = str(sweep_cfg["mlflow_experiment"])
+    # base_args from config (e.g. --horizon, --min_high_vol_recall_delta); always include recall floor
+    cfg_base_args: list[str] = [str(a) for a in sweep_cfg.get("base_args", [])]
+    base_args = cfg_base_args if "--min_high_vol_recall_delta" in cfg_base_args else cfg_base_args + ["--min_high_vol_recall_delta", "-1.0"]
 
     mlflow.set_tracking_uri("file:./mlruns")
 
     for asset in assets:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        # Asset name sanitised for use in study_name (^ and - are invalid in some backends)
         asset_safe = asset.replace("^", "").replace("-", "_")
-        study_name = f"sweep_{asset_safe}_{timestamp}"
 
-        print(f"\n[sweep] Starting Optuna study for asset={asset} | study={study_name} | n_trials={n_trials}")
-        study = optuna.create_study(
+        # Stable name for resume; timestamped name for fresh runs.
+        if args.resume:
+            study_name = f"sweep_{asset_safe}"
+        else:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            study_name = f"sweep_{asset_safe}_{timestamp}"
+
+        study_kwargs: dict[str, Any] = dict(
             study_name=study_name,
             direction="maximize",
             sampler=optuna.samplers.TPESampler(seed=42),
         )
+        if args.study_storage:
+            study_kwargs["storage"] = args.study_storage
+            study_kwargs["load_if_exists"] = args.resume
+
+        study = optuna.create_study(**study_kwargs)
+        already_done = len(study.trials)
+
+        if args.resume and already_done > 0:
+            print(
+                f"\n[sweep] Resuming study={study_name} | asset={asset} | "
+                f"trials already done={already_done} | target={n_trials}"
+            )
+        else:
+            print(
+                f"\n[sweep] Starting Optuna study for asset={asset} | "
+                f"study={study_name} | n_trials={n_trials}"
+            )
+
+        # Warm-start: enqueue best structural params from a previous experiment.
+        # Only inject when the study is fresh (no existing trials) to avoid duplicates.
+        if args.enqueue_best_from and already_done == 0:
+            raw_params = get_best_params_from_experiment(args.enqueue_best_from, asset)
+            if raw_params:
+                coerced = _coerce_enqueued_params(raw_params, search_space)
+                print(
+                    f"[sweep] Warm-start enqueue for asset={asset} "
+                    f"from experiment '{args.enqueue_best_from}': {coerced}"
+                )
+                study.enqueue_trial(coerced)
+            else:
+                print(
+                    f"[sweep] No warm-start params found for asset={asset} "
+                    f"in experiment '{args.enqueue_best_from}'; starting from scratch."
+                )
+
+        # How many trials to run this session.
+        remaining = max(0, n_trials - already_done)
+        if remaining == 0:
+            print(f"[sweep] asset={asset} | study already has {already_done} trials — nothing to do.")
+            log_sweep_summary(experiment_name, asset, study, n_failed=0)
+            continue
 
         n_failed = 0
         objective = make_objective(
             asset=asset,
             search_space=search_space,
-            base_args=[],
+            base_args=base_args,
             experiment_name=experiment_name,
             study_name=study_name,
             strict=args.sweep_strict,
@@ -285,7 +441,7 @@ def main() -> None:
                 n_failed += 1
             return score
 
-        study.optimize(objective_with_count, n_trials=n_trials)
+        study.optimize(objective_with_count, n_trials=remaining)
 
         n_completed = sum(1 for t in study.trials if t.value is not None and math.isfinite(t.value))
         if n_completed > 0:
