@@ -1,4 +1,12 @@
-"""Unit tests for sweep_runner.py."""
+'''
+@author: Manuel Díaz-Meco Terrés
+
+@email: manidmt5@gmail.com
+
+@date: 2026-03-28
+
+@description: Unit tests for sweep_runner.py.
+'''
 import json
 import sys
 from pathlib import Path

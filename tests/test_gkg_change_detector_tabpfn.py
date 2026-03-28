@@ -1,4 +1,12 @@
-"""Tests for TabPFN support in the GKG change detector."""
+'''
+@author: Manuel Díaz-Meco Terrés
+
+@email: manidmt5@gmail.com
+
+@date: 2026-03-28
+
+@description: Tests for TabPFN support in the GKG change detector.
+'''
 import sys
 import unittest.mock as mock
 

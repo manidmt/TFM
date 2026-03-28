@@ -1,4 +1,12 @@
-"""Tests for src/quant_risk/tracking/mlflow_utils.py"""
+'''
+@author: Manuel Díaz-Meco Terrés
+
+@email: manidmt5@gmail.com
+
+@date: 2026-03-28
+
+@description: Tests for src/quant_risk/tracking/mlflow_utils.py.
+'''
 from __future__ import annotations
 
 from quant_risk.tracking.mlflow_utils import MlflowConfig, get_git_sha, is_enabled

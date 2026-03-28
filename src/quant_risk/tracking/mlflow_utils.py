@@ -150,7 +150,7 @@ def log_artifact_safe(cfg: MlflowConfig, path) -> None:
         if p.exists():
             mlflow.log_artifact(str(p))
         else:
-            _warn_or_raise(cfg, FileNotFoundError(f"[mlflow] artifact not found: {p}"))
+            _warn_or_raise(cfg, FileNotFoundError(f"artifact not found: {p}"))
     except Exception as exc:
         _warn_or_raise(cfg, exc)
 

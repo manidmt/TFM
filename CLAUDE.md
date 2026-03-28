@@ -42,7 +42,7 @@ poetry run python scripts/walk_forward_chain_tab.py \
   --tickers GSPC BTC-USD TLT \
   --horizon 5 20 \
   --tabular_model xgb \
-  --grid_profile default \
+  --grid_profile promising \
   --use_mlflow \
   --mlflow_experiment walk_forward_chain_tab
 ```

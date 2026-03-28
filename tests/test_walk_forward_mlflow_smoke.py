@@ -1,8 +1,12 @@
-"""Smoke tests for the MLflow helper functions added to walk_forward_chain_tab.py.
+'''
+@author: Manuel Díaz-Meco Terrés
 
-These tests verify that the param/metric/tag builder functions work correctly in
-isolation, without requiring a real MLflow tracking server or any data files.
-"""
+@email: manidmt5@gmail.com
+
+@date: 2026-03-28
+
+@description: Smoke tests for the MLflow helper functions added to walk_forward_chain_tab.py.
+'''
 from __future__ import annotations
 
 import argparse
@@ -195,10 +199,12 @@ def test_mlflow_cfg_disabled_does_not_call_mlflow():
 
 def test_new_cli_flags_in_help():
     import subprocess, sys
+    root = Path(__file__).resolve().parents[1]
+    script_path = root / "scripts" / "walk_forward_chain_tab.py"
     result = subprocess.run(
-        [sys.executable, "scripts/walk_forward_chain_tab.py", "--help"],
-        capture_output=True, text=True,
-        cwd="/home/manidmt/TFM/quant-risk-tfm"
+        [sys.executable, str(script_path), "--help"],
+        capture_output=True,
+        text=True,
     )
     help_text = result.stdout + result.stderr
     assert "--tabpfn_n_estimators" in help_text
