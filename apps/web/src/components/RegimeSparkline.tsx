@@ -12,36 +12,50 @@ const COLOR: Record<VolatilityClass, string> = {
   high: '#9a5246',
 };
 
+function draw(canvas: HTMLCanvasElement, regimes: VolatilityClass[]) {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.offsetWidth;
+  const H = 20;
+
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  ctx.scale(dpr, dpr);
+
+  const bw = W / regimes.length;
+  ctx.clearRect(0, 0, W, H);
+  ctx.globalAlpha = 0.75;
+
+  regimes.forEach((regime, i) => {
+    ctx.fillStyle = COLOR[regime];
+    ctx.beginPath();
+    if (ctx.roundRect) {
+      ctx.roundRect(i * bw + 0.5, 0, bw - 1, H, 1);
+    } else {
+      ctx.rect(i * bw + 0.5, 0, bw - 1, H);
+    }
+    ctx.fill();
+  });
+
+  ctx.globalAlpha = 1;
+}
+
 export default function RegimeSparkline({ regimes }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || regimes.length === 0) return;
+    if (!canvas) return;
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    // Draw immediately in case layout is already complete
+    draw(canvas, regimes);
 
-    const W = canvas.offsetWidth;
-    const H = canvas.height;
-    canvas.width = W;
-
-    const bw = W / regimes.length;
-    ctx.clearRect(0, 0, W, H);
-
-    regimes.forEach((regime, i) => {
-      ctx.fillStyle = COLOR[regime];
-      ctx.globalAlpha = 0.75;
-      ctx.beginPath();
-      // roundRect may not exist in older browsers — use rect as fallback
-      if (ctx.roundRect) {
-        ctx.roundRect(i * bw + 0.5, 0, bw - 1, H, 1);
-      } else {
-        ctx.rect(i * bw + 0.5, 0, bw - 1, H);
-      }
-      ctx.fill();
-    });
-    ctx.globalAlpha = 1;
+    // Redraw on resize (handles first-render zero-width case)
+    const ro = new ResizeObserver(() => draw(canvas, regimes));
+    ro.observe(canvas);
+    return () => ro.disconnect();
   }, [regimes]);
 
   if (regimes.length === 0) return null;
@@ -49,8 +63,9 @@ export default function RegimeSparkline({ regimes }: Props) {
   return (
     <canvas
       ref={canvasRef}
-      height={20}
-      style={{ display: 'block', width: '100%', borderRadius: '3px' }}
+      aria-label="Volatility regime history"
+      role="img"
+      style={{ display: 'block', width: '100%', height: '20px', borderRadius: '3px' }}
     />
   );
 }
