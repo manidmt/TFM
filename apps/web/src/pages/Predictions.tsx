@@ -16,15 +16,17 @@ export default function Predictions() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
+
     Promise.all([
       api.get<AssetOut[]>('/api/public/assets'),
       api.get<PredictionOut[]>('/api/public/predictions/latest'),
     ])
       .then(([a, p]) => {
+        if (cancelled) return;
         setAssets(a);
         setPredictions(p);
 
-        // Fetch sparkline history for each asset in parallel
         Promise.all(
           a.map((asset) =>
             api
@@ -37,15 +39,22 @@ export default function Predictions() {
               }))
               .catch(() => ({ asset_id: asset.asset_id, regimes: [] as VolatilityClass[] })),
           ),
-        ).then((results) => {
-          const map: Record<string, VolatilityClass[]> = {};
-          results.forEach(({ asset_id, regimes }) => {
-            map[asset_id] = regimes;
-          });
-          setSparklines(map);
-        });
+        )
+          .then((results) => {
+            if (cancelled) return;
+            const map: Record<string, VolatilityClass[]> = {};
+            results.forEach(({ asset_id, regimes }) => {
+              map[asset_id] = regimes;
+            });
+            setSparklines(map);
+          })
+          .catch(() => {});
       })
       .catch(() => setError('Failed to load predictions.'));
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const predMap = Object.fromEntries(predictions.map((p) => [p.asset_id, p]));
