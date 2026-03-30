@@ -180,13 +180,17 @@ export default function PriceRegimeChart({ prices, regimes, latestPred }: Props)
         ctx.fillText(label, PAD.left - 6, py(v) + 3.5);
       }
 
-      // X-axis month labels from actual dates
+      // X-axis labels — adaptive format based on range
       if (points.length > 1) {
         ctx.textAlign = 'center';
-        const step = Math.floor(N / 5);
+        const step = Math.max(1, Math.floor(N / 5));
         for (let i = 0; i < N; i += step) {
-          const d = new Date(points[i].date);
-          const label = d.toLocaleDateString('en-US', { month: 'short' });
+          // Add T12:00:00 to avoid UTC midnight shifting day by timezone offset
+          const d = new Date(points[i].date + 'T12:00:00');
+          const label =
+            range === '1M' || range === '3M'
+              ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+              : d.toLocaleDateString('en-US', { month: 'short' });
           ctx.fillText(label, px(i), PAD.top + cH + 14);
         }
       }
@@ -196,7 +200,7 @@ export default function PriceRegimeChart({ prices, regimes, latestPred }: Props)
     const ro = new ResizeObserver(render);
     ro.observe(canvas);
     return () => ro.disconnect();
-  }, [points, latestPred]);
+  }, [points, latestPred, range]);
 
   return (
     <div>
