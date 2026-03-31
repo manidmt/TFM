@@ -340,6 +340,15 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--study_name",
+        default=None,
+        help=(
+            "Override the Optuna study name for a single-asset resume. Useful when "
+            "the previous run used a timestamped name (e.g. sweep_BTC_USD_20260329_180530). "
+            "Only valid when --assets specifies exactly one asset."
+        ),
+    )
+    parser.add_argument(
         "--enqueue_best_from",
         default=None,
         metavar="EXPERIMENT",
@@ -353,6 +362,10 @@ def main() -> None:
 
     if args.resume and not args.study_storage:
         parser.error("--resume requires --study_storage (e.g. sqlite:///optuna_studies.db)")
+    if args.study_name and not args.resume:
+        parser.error("--study_name requires --resume")
+    if args.study_name and args.assets and len(args.assets) > 1:
+        parser.error("--study_name can only be used with a single --assets value")
 
     cfg = load_sweep_config(args.config)
     sweep_cfg = cfg["sweep"]
@@ -371,7 +384,9 @@ def main() -> None:
         asset_safe = asset.replace("^", "").replace("-", "_")
 
         # Stable name for resume; timestamped name for fresh runs.
-        if args.resume:
+        if args.study_name:
+            study_name = args.study_name
+        elif args.resume:
             study_name = f"sweep_{asset_safe}"
         else:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

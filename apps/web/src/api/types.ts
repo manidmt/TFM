@@ -4,8 +4,8 @@ export type VolatilityClass = 'low' | 'medium' | 'high';
 
 export interface AssetOut {
   asset_id: string;
-  label: string;
-  description: string;
+  source_ticker: string;
+  display_name: string;
 }
 
 export interface PredictionOut {

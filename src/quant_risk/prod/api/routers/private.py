@@ -1,0 +1,358 @@
+'''
+@author: Manuel Díaz-Meco Terrés
+
+@email: manidmt5@gmail.com
+
+@date: 2026-03-28
+
+@description: Private portfolio endpoints — requires authentication (rpi5.md §12.2, §15).
+
+Routes
+------
+GET  /api/private/portfolios
+    List the current user's portfolios (name + id, no positions).
+
+POST /api/private/portfolios
+    Create a new portfolio with positions.
+
+GET  /api/private/portfolios/{portfolio_id}
+    Get one portfolio with all positions.
+
+PUT  /api/private/portfolios/{portfolio_id}
+    Update portfolio name and/or replace all positions atomically.
+
+DELETE /api/private/portfolios/{portfolio_id}
+    Delete a portfolio and all its positions.
+
+POST /api/private/portfolios/{portfolio_id}/analyze
+    Run the portfolio analysis pipeline and return the result.
+    Accepts an optional ``positions`` override for what-if analysis.
+'''
+
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from quant_risk.prod.api.deps import get_auth_db, get_current_user, get_serving_db
+from quant_risk.prod.auth.models import User
+from quant_risk.prod.auth.portfolios import (
+    PortfolioNotFoundError,
+    PortfolioValidationError,
+    PositionInput,
+    create_portfolio,
+    delete_portfolio,
+    get_portfolio,
+    list_user_portfolios,
+    set_positions,
+    update_portfolio_name,
+)
+from quant_risk.prod.portfolio_analysis import analyze_portfolio_orm
+from quant_risk.prod.serving.duckdb import ServingDB
+
+router = APIRouter(prefix="/api/private", tags=["private"])
+
+
+# ---------------------------------------------------------------------------
+# Request / Response schemas
+# ---------------------------------------------------------------------------
+
+class PositionIn(BaseModel):
+    label: str
+    weight_pct: float
+    proxy_asset_id: str
+
+
+class CreatePortfolioRequest(BaseModel):
+    name: str
+    positions: list[PositionIn]
+
+
+class UpdatePortfolioRequest(BaseModel):
+    name: str | None = None
+    positions: list[PositionIn] | None = None
+
+
+class PortfolioSummaryOut(BaseModel):
+    portfolio_id: str
+    name: str
+
+
+class PositionOut(BaseModel):
+    label: str
+    weight_pct: float
+    proxy_asset_id: str
+
+
+class PortfolioDetailOut(BaseModel):
+    portfolio_id: str
+    name: str
+    positions: list[PositionOut]
+
+
+class PositionAnalysisOut(BaseModel):
+    label: str
+    weight_pct: float
+    normalized_weight: float
+    proxy_asset_id: str
+    predicted_class: str | None
+    p_low: float | None
+    p_medium: float | None
+    p_high: float | None
+    forecast_date: str | None
+
+
+class AssetGroupOut(BaseModel):
+    asset_id: str
+    aggregate_weight: float
+    predicted_class: str | None
+    p_low: float | None
+    p_medium: float | None
+    p_high: float | None
+    forecast_date: str | None
+    position_labels: list[str]
+
+
+class PortfolioAnalysisOut(BaseModel):
+    portfolio_id: str
+    portfolio_name: str
+    total_weight_pct: float
+    positions: list[PositionAnalysisOut]
+    asset_groups: list[AssetGroupOut]
+    portfolio_p_low: float
+    portfolio_p_medium: float
+    portfolio_p_high: float
+    portfolio_signal: str | None
+    missing_predictions: list[str]
+
+
+class AnalyzeRequest(BaseModel):
+    positions: list[PositionIn] | None = None
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _pos_in_to_input(p: PositionIn) -> PositionInput:
+    return PositionInput(
+        label=p.label,
+        weight_pct=p.weight_pct,
+        proxy_asset_id=p.proxy_asset_id,
+    )
+
+
+def _handle_portfolio_errors(exc: Exception) -> None:
+    if isinstance(exc, PortfolioNotFoundError):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    if isinstance(exc, PortfolioValidationError):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        )
+    raise exc
+
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+
+@router.get("/portfolios", response_model=list[PortfolioSummaryOut])
+def list_portfolios(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_auth_db),
+):
+    """List the current user's portfolios."""
+    portfolios = list_user_portfolios(db, current_user.id)
+    return [
+        PortfolioSummaryOut(portfolio_id=p.id, name=p.name) for p in portfolios
+    ]
+
+
+@router.post(
+    "/portfolios",
+    response_model=PortfolioDetailOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_portfolio_endpoint(
+    body: CreatePortfolioRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_auth_db),
+):
+    """Create a new portfolio with positions."""
+    try:
+        portfolio = create_portfolio(
+            db,
+            user_id=current_user.id,
+            name=body.name,
+            positions=[_pos_in_to_input(p) for p in body.positions],
+        )
+        db.commit()
+        db.refresh(portfolio)
+    except (PortfolioNotFoundError, PortfolioValidationError) as exc:
+        _handle_portfolio_errors(exc)
+
+    return PortfolioDetailOut(
+        portfolio_id=portfolio.id,
+        name=portfolio.name,
+        positions=[
+            PositionOut(
+                label=pos.label,
+                weight_pct=pos.weight_pct,
+                proxy_asset_id=pos.proxy_asset_id,
+            )
+            for pos in portfolio.positions
+        ],
+    )
+
+
+@router.get("/portfolios/{portfolio_id}", response_model=PortfolioDetailOut)
+def get_portfolio_endpoint(
+    portfolio_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_auth_db),
+):
+    """Get one portfolio with all positions."""
+    try:
+        portfolio = get_portfolio(db, portfolio_id, current_user.id)
+    except PortfolioNotFoundError as exc:
+        _handle_portfolio_errors(exc)
+
+    return PortfolioDetailOut(
+        portfolio_id=portfolio.id,
+        name=portfolio.name,
+        positions=[
+            PositionOut(
+                label=pos.label,
+                weight_pct=pos.weight_pct,
+                proxy_asset_id=pos.proxy_asset_id,
+            )
+            for pos in portfolio.positions
+        ],
+    )
+
+
+@router.put("/portfolios/{portfolio_id}", response_model=PortfolioDetailOut)
+def update_portfolio_endpoint(
+    portfolio_id: str,
+    body: UpdatePortfolioRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_auth_db),
+):
+    """Update portfolio name and/or replace all positions atomically."""
+    if body.name is None and body.positions is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="At least one of 'name' or 'positions' must be provided.",
+        )
+    try:
+        if body.name is not None:
+            update_portfolio_name(db, portfolio_id, current_user.id, body.name)
+        if body.positions is not None:
+            set_positions(
+                db,
+                portfolio_id,
+                current_user.id,
+                [_pos_in_to_input(p) for p in body.positions],
+            )
+        db.commit()
+        portfolio = get_portfolio(db, portfolio_id, current_user.id)
+    except (PortfolioNotFoundError, PortfolioValidationError) as exc:
+        _handle_portfolio_errors(exc)
+
+    return PortfolioDetailOut(
+        portfolio_id=portfolio.id,
+        name=portfolio.name,
+        positions=[
+            PositionOut(
+                label=pos.label,
+                weight_pct=pos.weight_pct,
+                proxy_asset_id=pos.proxy_asset_id,
+            )
+            for pos in portfolio.positions
+        ],
+    )
+
+
+@router.delete("/portfolios/{portfolio_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_portfolio_endpoint(
+    portfolio_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_auth_db),
+):
+    """Delete a portfolio and all its positions."""
+    try:
+        delete_portfolio(db, portfolio_id, current_user.id)
+        db.commit()
+    except PortfolioNotFoundError as exc:
+        _handle_portfolio_errors(exc)
+
+
+@router.post("/portfolios/{portfolio_id}/analyze", response_model=PortfolioAnalysisOut)
+def analyze_portfolio_endpoint(
+    portfolio_id: str,
+    body: AnalyzeRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_auth_db),
+    serving_db: ServingDB = Depends(get_serving_db),
+):
+    """Run portfolio analysis.
+
+    Pass ``positions`` in the request body for what-if analysis without
+    saving.  Omit ``positions`` to analyse the saved portfolio state.
+    """
+    try:
+        portfolio = get_portfolio(db, portfolio_id, current_user.id)
+    except PortfolioNotFoundError as exc:
+        _handle_portfolio_errors(exc)
+
+    overrides = (
+        [_pos_in_to_input(p) for p in body.positions]
+        if body.positions is not None
+        else None
+    )
+
+    try:
+        result = analyze_portfolio_orm(portfolio, serving_db, position_overrides=overrides)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        )
+
+    return PortfolioAnalysisOut(
+        portfolio_id=result.portfolio_id,
+        portfolio_name=result.portfolio_name,
+        total_weight_pct=result.total_weight_pct,
+        positions=[
+            PositionAnalysisOut(
+                label=pa.label,
+                weight_pct=pa.weight_pct,
+                normalized_weight=pa.normalized_weight,
+                proxy_asset_id=pa.proxy_asset_id,
+                predicted_class=pa.predicted_class,
+                p_low=pa.p_low,
+                p_medium=pa.p_medium,
+                p_high=pa.p_high,
+                forecast_date=str(pa.forecast_date) if pa.forecast_date else None,
+            )
+            for pa in result.positions
+        ],
+        asset_groups=[
+            AssetGroupOut(
+                asset_id=ag.asset_id,
+                aggregate_weight=ag.aggregate_weight,
+                predicted_class=ag.predicted_class,
+                p_low=ag.p_low,
+                p_medium=ag.p_medium,
+                p_high=ag.p_high,
+                forecast_date=str(ag.forecast_date) if ag.forecast_date else None,
+                position_labels=ag.position_labels,
+            )
+            for ag in result.asset_groups
+        ],
+        portfolio_p_low=result.portfolio_p_low,
+        portfolio_p_medium=result.portfolio_p_medium,
+        portfolio_p_high=result.portfolio_p_high,
+        portfolio_signal=result.portfolio_signal,
+        missing_predictions=result.missing_predictions,
+    )

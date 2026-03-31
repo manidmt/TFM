@@ -1,0 +1,79 @@
+# Production feature config for the RPi5 deployment lane.
+#
+# This file is the production counterpart of config/features.yaml.
+# Key constraints vs the research config:
+#   - horizon is locked to 5 days only (rpi5.md §3, §6)
+#   - per-asset only: no cross-asset feature blocks (rpi5.md §7)
+#   - feature profile locked to gkg_v1_features_compact (same as research)
+#     to ensure champions trained with this profile work on RPi5
+#
+# Sections of rpi5.md that govern this file: §6, §7, §16, §26.1, §26.3
+
+calendar:
+  freq: "B"
+  timezone: "UTC"
+
+targets:
+  # Production V1: 5-day horizon only.
+  # 20-day horizon is explicitly out of scope for V1 (rpi5.md §2, §3).
+  horizons: [5]
+  regime_bins: 3
+  regime_method: "quantile"
+
+features:
+  returns:
+    type: "log"
+    lags: [1, 5, 20]
+  realized_vol:
+    window_sizes: [5, 20]
+  macro_transforms:
+    method: "diff"
+    lags: [1, 5, 20]
+  macro_publication_lags:
+    vix: 0
+    fed_assets: 1
+    tga: 1
+    rrp: 1
+    m2: 5
+    ffr: 1
+    sofr: 1
+    net_liquidity: 1
+  shock_features:
+    rv_long_window: 60
+    rv_ema_spans: [10, 30]
+    vol_of_vol_window: 20
+    return_shock_window: 60
+    return_shock_quantiles: [0.8, 0.9]
+    volume_z_window: 20
+    # cross_corr_window intentionally omitted: cross-asset features are not
+    # allowed in the production lane (rpi5.md §7).
+
+news_features:
+  # Locked to the same stable profile used in the research lane.
+  # Do not change profile_name or profile_version without retraining champions.
+  profile_name: "gkg_v1_features_compact"
+  profile_version: "2026-03-13"
+  enabled: true
+  source_table: "news_features_daily"
+  topics_enabled: []
+  windows: [3, 10, 20]
+  attn_z_window: 252
+  attn_shock_threshold: 2.0
+  shock_windows: [3, 10, 20]
+  compact_mode: true
+  topic_share_enabled: true
+  include_roll_sum: false
+  include_roll_mean: false
+  include_roll_std: false
+  include_tone_std: false
+  include_tone_neg_share: false
+  include_interactions: true
+  health:
+    min_nonzero_rate: 0.01
+    min_unique_values: 3
+    drop_dead_queries: true
+    fail_if_all_dead: true
+
+split:
+  train_end: "2020-12-31"
+  val_end: "2023-12-31"

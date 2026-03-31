@@ -1,0 +1,98 @@
+.layout {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.layout-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+}
+
+.layout-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  height: 56px;
+}
+
+.layout-wordmark {
+  font-family: 'Newsreader', Georgia, serif;
+  font-size: 1.125rem;
+  color: var(--accent);
+  text-decoration: none;
+  letter-spacing: -0.01em;
+  margin-right: auto;
+}
+
+.layout-nav-links {
+  display: flex;
+  gap: var(--space-4);
+}
+
+.nav-link {
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 0.9rem;
+  color: var(--text-soft);
+  text-decoration: none;
+  letter-spacing: 0.01em;
+  transition: color 0.15s;
+}
+
+.nav-link:hover,
+.nav-link.active {
+  color: var(--text);
+}
+
+.layout-nav-auth {
+  margin-left: var(--space-3);
+}
+
+.btn-ghost {
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 0.8125rem;
+  color: var(--text-soft);
+  background: none;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  padding: 6px 16px;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  letter-spacing: 0.01em;
+  transition: color 0.2s, border-color 0.2s;
+}
+
+.btn-ghost:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.layout-main {
+  flex: 1;
+}
+
+.layout-footer {
+  border-top: 1px solid var(--line);
+  padding: var(--space-5) 0;
+  margin-top: var(--space-7);
+}
+
+.footer-inner {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-size: 0.8rem;
+  color: var(--text-faint);
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+}
+
+.footer-sep {
+  color: var(--line-strong);
+}

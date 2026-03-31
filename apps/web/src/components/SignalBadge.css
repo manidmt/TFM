@@ -1,0 +1,35 @@
+.signal-badge {
+  display: inline-block;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 3px 10px;
+  border-radius: 100px;
+  white-space: nowrap;
+}
+
+.signal-none {
+  color: var(--text-faint);
+}
+
+.signal-low {
+  background: color-mix(in srgb, var(--low) 12%, transparent);
+  color: var(--low);
+}
+
+.signal-medium {
+  background: color-mix(in srgb, var(--medium) 12%, transparent);
+  color: var(--medium);
+}
+
+.signal-high {
+  background: color-mix(in srgb, var(--high) 12%, transparent);
+  color: var(--high);
+}
+
+.signal-sm {
+  font-size: 0.68rem;
+  padding: 2px 8px;
+}

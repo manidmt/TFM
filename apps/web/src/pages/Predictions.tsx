@@ -83,7 +83,7 @@ export default function Predictions() {
                 <div className="asset-card-header">
                   <div>
                     <p className="asset-id">{asset.asset_id}</p>
-                    <p className="asset-label">{asset.label}</p>
+                    <p className="asset-label">{asset.display_name}</p>
                   </div>
                   <SignalBadge signal={pred?.predicted_class ?? null} />
                 </div>
