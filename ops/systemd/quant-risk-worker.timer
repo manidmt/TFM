@@ -1,0 +1,35 @@
+# quant-risk-worker.timer — daily trigger for the production batch.
+#
+# Fires at 07:30 UTC every day, using D-1 closed-market data.
+# If the RPi5 was off at trigger time, the batch runs on next boot
+# (Persistent=true).
+#
+# Install:
+#   sudo cp ops/systemd/quant-risk-worker.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now quant-risk-worker.timer
+#
+# Check status:
+#   systemctl status quant-risk-worker.timer
+#   systemctl list-timers quant-risk-worker.timer
+#
+# Reference: rpi5.md §10.1
+
+[Unit]
+Description=quant-risk daily batch timer
+Documentation=https://github.com/manidmt/quant-risk-tfm
+
+[Timer]
+# Fire at 07:30 UTC daily.
+# All 6 major markets have closed by this time for the D-1 session.
+OnCalendar=*-*-* 07:30:00 UTC
+
+# Run immediately on next boot if the last scheduled run was missed.
+Persistent=true
+
+# Randomise start within a 5-minute window to avoid thundering-herd if
+# multiple services start simultaneously after a reboot.
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

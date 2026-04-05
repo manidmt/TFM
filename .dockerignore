@@ -1,0 +1,70 @@
+# .dockerignore — keep Docker build contexts lean.
+# Applied to both Dockerfile.api and Dockerfile.worker (context = repo root).
+
+# Version control
+.git
+.gitignore
+.gitattributes
+
+# Python artifacts
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv
+venv
+env/
+
+# Data — potentially gigabytes; mounted as volumes at runtime instead.
+data/
+
+# Training runs and model artifacts — not needed at inference time.
+runs/
+models/
+
+# Notebooks — research only, not part of production runtime.
+notebooks/
+
+# Node / frontend build artifacts
+apps/web/node_modules/
+apps/web/dist/
+apps/web/.vite/
+node_modules/
+
+# MLflow tracking — research-side only.
+mlruns/
+mlartifacts/
+
+# Test artifacts
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets — never in the image.
+.env
+ops/docker/.env
+
+# Screenshots / analysis images (development artefacts)
+*.png
+conver.txt
+
+# Docs — not needed at runtime.
+docs/

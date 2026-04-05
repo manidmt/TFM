@@ -1,0 +1,60 @@
+# Dockerfile.worker — full ML stack image for the RPi5 daily batch worker.
+#
+# Includes the complete production runtime: ingestion, feature engineering,
+# and model inference (xgboost, tabpfn, arch, scikit-learn, torch, ...).
+# This image is intentionally larger than Dockerfile.api.
+#
+# The worker is a run-once job triggered by a systemd timer (rpi5.md §10.1).
+# It is NOT a persistent service.
+#
+# Build context: repository root
+#   docker build -f ops/docker/Dockerfile.worker -t quant-risk-worker .
+#
+# Reference: rpi5.md §10, §13.2, §26.1
+
+FROM python:3.11-slim AS base
+
+# System deps required for building/running the ML stack on arm64:
+#   gcc g++ — native extensions (arch, statsmodels, numpy scipy wheel builds)
+#   libpq-dev — psycopg2 (for any DB ops the worker touches)
+#   libgomp1 — OpenMP (XGBoost parallel inference)
+#   curl — healthcheck or download helpers during batch
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        gcc \
+        g++ \
+        libpq-dev \
+        libgomp1 \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# ---- Poetry-based full dependency install ----
+# Use poetry export to produce a requirements.txt from the locked versions,
+# then install with pip so the final image contains no poetry overhead.
+COPY pyproject.toml poetry.lock ./
+
+RUN pip install --no-cache-dir "poetry==1.8.*" \
+    && poetry export \
+        --without dev \
+        --format requirements.txt \
+        --output /tmp/requirements-worker.txt \
+    && pip install --no-cache-dir -r /tmp/requirements-worker.txt \
+    && pip uninstall -y poetry \
+    && rm /tmp/requirements-worker.txt
+
+# ---- application code ----
+COPY src/ src/
+COPY config/ config/
+
+RUN pip install --no-cache-dir --no-deps -e .
+
+# Non-root user.
+RUN useradd -m -u 1000 appuser
+USER appuser
+
+# Default entrypoint: run the daily batch.
+# The systemd unit passes additional CLI flags as needed (e.g. --dry-run).
+ENTRYPOINT ["python", "-m", "quant_risk.prod.worker.main"]
+CMD []
