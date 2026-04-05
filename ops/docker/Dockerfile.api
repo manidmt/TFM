@@ -29,6 +29,7 @@ RUN pip install --no-cache-dir -r requirements-api.txt
 
 # ---- application code ----
 # Copy only what the API needs; keep the image lean.
+COPY pyproject.toml .
 COPY src/ src/
 COPY config/ config/
 
