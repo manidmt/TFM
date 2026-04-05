@@ -35,7 +35,7 @@ services:
       POSTGRES_USER: quant_risk
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
-      - /srv/quant-risk/postgres:/var/lib/postgresql/data
+      - ${HOME}/Desktop/risk/postgres:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U quant_risk -d quant_risk"]
       interval: 10s
@@ -66,7 +66,7 @@ services:
       QUANT_RISK_COOKIE_SECURE: "true"
     volumes:
       # DuckDB files mounted read-only (worker writes, api reads)
-      - /srv/quant-risk/db:/data:ro
+      - ${HOME}/Desktop/risk/db:/data:ro
     # No host port binding — only reachable inside the compose network via "api:8000"
     expose:
       - "8000"
@@ -95,7 +95,7 @@ services:
       # Nginx config
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
       # React static build — rebuilt on each app release, mounted read-only
-      - /srv/quant-risk/static:/usr/share/nginx/html:ro
+      - ${HOME}/Desktop/risk/static:/usr/share/nginx/html:ro
     ports:
       # Bind only to loopback — cloudflared connects here.
       - "127.0.0.1:8080:80"
@@ -123,9 +123,9 @@ services:
       QUANT_RISK_DB_PATH: /data/financial_data.duckdb
     volumes:
       # DuckDB files read-write (worker ingests and writes predictions)
-      - /srv/quant-risk/db:/data
+      - ${HOME}/Desktop/risk/db:/data
       # Bundles mounted read-only for inference
-      - /srv/quant-risk/bundles:/srv/quant-risk/bundles:ro
+      - ${HOME}/Desktop/risk/bundles:/srv/quant-risk/bundles:ro
     networks:
       - backend
 

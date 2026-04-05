@@ -21,13 +21,13 @@ Wants=network-online.target
 Type=oneshot
 
 # Repo clone on the RPi5 — used to resolve the compose file path.
-WorkingDirectory=/opt/quant-risk-tfm
+WorkingDirectory=/home/manidmt/Desktop/risk/quant-risk-tfm
 
 # Run the worker container and remove it after completion (--rm).
 # The worker profile ensures only the worker service is spun up.
 ExecStart=/usr/bin/docker compose \
-    --file ops/docker/compose.rpi5.yml \
-    --env-file ops/docker/.env \
+    --file /home/manidmt/Desktop/risk/quant-risk-tfm/ops/docker/compose.rpi5.yml \
+    --env-file /home/manidmt/Desktop/risk/quant-risk-tfm/ops/docker/.env \
     run --rm worker
 
 # Allow up to 2 hours for a full batch run (all 6 assets + retries).
