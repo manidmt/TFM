@@ -33,7 +33,7 @@ WORKDIR /app
 # ---- Poetry-based full dependency install ----
 # Use poetry export to produce a requirements.txt from the locked versions,
 # then install with pip so the final image contains no poetry overhead.
-COPY pyproject.toml poetry.lock ./
+COPY pyproject.toml poetry.lock README.md ./
 
 RUN pip install --no-cache-dir "poetry==1.8.*" \
     && poetry export \
