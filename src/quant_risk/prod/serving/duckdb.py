@@ -166,6 +166,22 @@ class ServingDB:
                 str(self._path),
                 read_only=self._read_only,
             )
+            # Workaround for a DuckDB optimizer assertion failure observed on
+            # 1.5.1 / aarch64: when prediction_runs receives an INSERT and the
+            # next MAX(attempt_no) aggregate reuses in-process partition
+            # statistics, StatisticsPropagator::TryExecuteAggregates crashes
+            # with "Attempted to access index 0 within vector of size 0".
+            # Disabling the propagator has no functional impact for our tiny
+            # tables (a few thousand rows) and sidesteps the bug.
+            if not self._read_only:
+                try:
+                    self._conn.execute(
+                        "SET disabled_optimizers='statistics_propagation'"
+                    )
+                except Exception:  # noqa: BLE001
+                    # Older DuckDB versions may not recognise the pragma —
+                    # silently ignore rather than break.
+                    pass
         return self._conn
 
     def close(self) -> None:

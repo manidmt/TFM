@@ -41,12 +41,176 @@ Reference: rpi5.md §8, §9, §10.3 (steps 5-6)
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 import pickle
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+
+class _CPUUnpickler(pickle.Unpickler):
+    """Unpickler that forces torch tensors to load on CPU.
+
+    Needed when a bundle was serialized on a CUDA machine but is being
+    deserialized on a CPU-only host (e.g. Raspberry Pi 5).  Without this,
+    torch raises ``RuntimeError: Attempting to deserialize object on a
+    CUDA device but torch.cuda.is_available() is False``.
+    """
+
+    def find_class(self, module: str, name: str) -> Any:
+        if module == "torch.storage" and name == "_load_from_bytes":
+            import torch  # imported lazily to avoid a hard dep for xgb-only bundles
+            return lambda b: torch.load(
+                io.BytesIO(b), map_location="cpu", weights_only=False
+            )
+        return super().find_class(module, name)
+
+
+def _force_model_to_cpu(model: Any) -> None:
+    """Force a loaded model onto CPU after unpickling on a CPU-only host.
+
+    Required for TabPFN models trained on CUDA: their internal
+    ``executor_`` carries a per-device model cache keyed by ``cuda:0``,
+    which causes ``torch.as_tensor(..., device=cuda:0)`` calls during
+    ``predict_proba`` to crash with
+    ``AssertionError: Torch not compiled with CUDA enabled``.
+
+    Strategy:
+    1.  If the object is a ``TabPFNClassifier`` / ``TabPFNRegressor``,
+        call its own ``.to("cpu")`` which correctly invokes
+        ``executor_.to([cpu_device], ...)`` and rebuilds the internal
+        model cache keyed by the CPU device.
+    2.  For any other object (or as a safety net), walk the instance
+        graph and rewrite cached ``device`` / ``device_`` attributes to
+        CPU.  The walk is bounded in depth and tracks visited ids.
+    """
+    try:
+        import torch  # imported lazily
+    except ImportError:
+        return
+
+    cpu = torch.device("cpu")
+
+    # --- 1. Preferred path: use TabPFN's own relocation API. -----------
+    try:
+        from tabpfn.classifier import TabPFNClassifier  # type: ignore[import]
+    except ImportError:
+        TabPFNClassifier = None  # type: ignore[assignment]
+    try:
+        from tabpfn.regressor import TabPFNRegressor  # type: ignore[import]
+    except ImportError:
+        TabPFNRegressor = None  # type: ignore[assignment]
+
+    tabpfn_types = tuple(t for t in (TabPFNClassifier, TabPFNRegressor) if t is not None)
+    if tabpfn_types and isinstance(model, tabpfn_types):
+        try:
+            model.to("cpu")
+            logger.info(
+                "Relocated TabPFN estimator to CPU via estimator.to('cpu')."
+            )
+            return
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "TabPFN .to('cpu') failed (%s); falling back to attribute walk.",
+                exc,
+            )
+
+    # --- 2. Fallback: best-effort attribute walker. -------------------
+    visited: set[int] = set()
+
+    def _walk(obj: Any, depth: int = 0) -> None:
+        if depth > 6 or id(obj) in visited:
+            return
+        visited.add(id(obj))
+
+        if isinstance(obj, torch.nn.Module):
+            try:
+                obj.to(cpu)
+            except Exception:  # noqa: BLE001
+                pass
+
+        if not hasattr(obj, "__dict__"):
+            return
+
+        for name, value in list(vars(obj).items()):
+            if name in ("device", "device_"):
+                if isinstance(value, torch.device) or (
+                    isinstance(value, str) and "cuda" in value.lower()
+                ):
+                    try:
+                        setattr(obj, name, cpu)
+                    except Exception:  # noqa: BLE001
+                        pass
+                continue
+            if value is None or isinstance(value, (int, float, str, bool, bytes)):
+                continue
+            if isinstance(value, (list, tuple)):
+                for item in value:
+                    _walk(item, depth + 1)
+                continue
+            if isinstance(value, dict):
+                for item in value.values():
+                    _walk(item, depth + 1)
+                continue
+            if hasattr(value, "__dict__") or isinstance(value, torch.nn.Module):
+                _walk(value, depth + 1)
+
+    _walk(model)
+
+
+def _patch_tabpfn_memory_check() -> None:
+    """Bypass TabPFN's CUDA memory planner on CPU-only hosts.
+
+    TabPFN calls ``should_save_peak_mem`` at inference time, which in turn
+    invokes ``torch.cuda.mem_get_info`` for every device in its cached
+    device list.  On a CPU-only torch build this raises
+    ``AssertionError: Torch not compiled with CUDA enabled``.  When CUDA
+    is not available we replace the function with a constant ``False``,
+    which disables the peak-memory safeguard (harmless for single-sample
+    inference on a daily batch).
+    """
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            return  # CUDA present → keep original behaviour
+    except ImportError:
+        return
+
+    try:
+        import tabpfn.architectures.base.memory as _tabpfn_memory
+    except ImportError:
+        return  # TabPFN not installed; nothing to patch
+
+    if getattr(_tabpfn_memory, "_qr_cpu_patched", False):
+        return
+
+    _noop = lambda *args, **kwargs: False  # noqa: E731
+
+    # Patch at the definition site.
+    _tabpfn_memory.should_save_peak_mem = _noop  # type: ignore[assignment]
+    _tabpfn_memory._qr_cpu_patched = True  # type: ignore[attr-defined]
+
+    # Patch at every *use* site.  Modules that did
+    # ``from tabpfn.architectures.base.memory import should_save_peak_mem``
+    # hold their own local binding which is not updated by the line above.
+    # tabpfn.inference is the known consumer; patch defensively in case of
+    # future re-exports.
+    for mod_name in ("tabpfn.inference",):
+        try:
+            import importlib
+            _mod = importlib.import_module(mod_name)
+        except ImportError:
+            continue
+        if hasattr(_mod, "should_save_peak_mem"):
+            setattr(_mod, "should_save_peak_mem", _noop)
+
+    logger.info(
+        "Patched should_save_peak_mem in tabpfn.architectures.base.memory "
+        "and tabpfn.inference to return False on CPU-only host."
+    )
 
 import numpy as np
 import pandas as pd
@@ -221,10 +385,16 @@ def _load_model_artifact(bundle_dir: Path, model_type: str) -> Any:
             return model
 
     # Generic pickle fallback (works for xgb, tabpfn, sklearn, etc.)
+    # _CPUUnpickler transparently maps CUDA tensors to CPU so bundles
+    # trained on GPU can be loaded on the CPU-only RPi5.
+    # _force_model_to_cpu then moves TabPFN's executor to CPU via its own
+    # API; after that, TabPFN's automatic CPU memory-saving heuristic
+    # kicks in and peak RSS stays within the RPi5's 8GB budget.
     pkl = model_dir / "model.pkl"
     if pkl.exists():
         with open(pkl, "rb") as f:
-            model = pickle.load(f)
+            model = _CPUUnpickler(f).load()
+        _force_model_to_cpu(model)
         logger.debug("Loaded model from pickle %s", pkl)
         return model
 
@@ -270,7 +440,7 @@ def _load_calibrator(bundle_dir: Path) -> Any | None:
 
     if cal_pkl.exists():
         with open(cal_pkl, "rb") as f:
-            calibrator = pickle.load(f)
+            calibrator = _CPUUnpickler(f).load()
         logger.debug("Loaded calibrator from %s", cal_pkl)
         return calibrator
 

@@ -368,7 +368,10 @@ def ingest_for_asset(
             try:
                 prices_ok, last_date = _check_prices_freshness(con, source_ticker)
                 if last_date is not None:
-                    data_cutoff_date = last_date
+                    # Cap at D-1: yfinance may return intraday/incomplete bars for today
+                    # while the market is open, but features rely on closed daily data
+                    # and macro publication lags assume D-1.
+                    data_cutoff_date = min(last_date, date.today() - timedelta(days=1))
             finally:
                 con.close()
 

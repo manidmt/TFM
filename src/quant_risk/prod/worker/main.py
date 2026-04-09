@@ -33,6 +33,7 @@ Reference: rpi5.md §10, §13.2, §26.1, §26.4
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -385,6 +386,7 @@ if __name__ == "__main__":
         features_config=args.features_config,
         bundles_dir=args.bundles_dir,
         serving_db_path=args.serving_db_path,
+        financial_db_path=os.environ.get("QUANT_RISK_DB_PATH"),
         forecast_date=forecast_date,
         max_retries=args.max_retries,
         dry_run=args.dry_run,
