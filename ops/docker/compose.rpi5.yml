@@ -64,16 +64,25 @@ services:
       QUANT_RISK_DB_PATH: /data/financial_data.duckdb
       QUANT_RISK_COOKIE_SECRET: ${COOKIE_SECRET}
       QUANT_RISK_COOKIE_SECURE: "true"
+      # Plan B (rpi5.md §10): shared bearer token for POST /api/internal/predictions.
+      # The off-box inference runner on the workstation uses this to push daily
+      # predictions into serving.duckdb without running the heavy model stack
+      # on the RPi5. Leave empty to disable the endpoint (returns 503).
+      QUANT_RISK_INTERNAL_TOKEN: ${INTERNAL_TOKEN:-}
     volumes:
-      # DuckDB files mounted read-only (worker writes, api reads)
-      - ${HOME}/Desktop/risk/db:/data:ro
+      # serving.duckdb mounted read-write so the internal push endpoint can
+      # upsert predictions. financial_data.duckdb is still only read by the
+      # public prices endpoint. The RPi5 worker must NOT run its predictions
+      # phase concurrently with this — DuckDB allows only one writer at a
+      # time. Disable the worker timer on the host to avoid lock contention.
+      - ${HOME}/Desktop/risk/db:/data
     # No host port binding — only reachable inside the compose network via "api:8000"
     expose:
       - "8000"
     networks:
       - backend
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8000/api/health || exit 1"]
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -98,7 +107,7 @@ services:
       - ${HOME}/Desktop/risk/static:/usr/share/nginx/html:ro
     ports:
       # Bind only to loopback — cloudflared connects here.
-      - "127.0.0.1:8080:80"
+      - "127.0.0.1:4747:80"
     networks:
       - backend
 
@@ -121,6 +130,7 @@ services:
     environment:
       QUANT_RISK_SERVING_DB_PATH: /data/serving.duckdb
       QUANT_RISK_DB_PATH: /data/financial_data.duckdb
+      PYTHONUNBUFFERED: "1"
     volumes:
       # DuckDB files read-write (worker ingests and writes predictions)
       - ${HOME}/Desktop/risk/db:/data

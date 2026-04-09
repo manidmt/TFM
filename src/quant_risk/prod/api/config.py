@@ -17,6 +17,12 @@ QUANT_RISK_SERVING_DB_PATH — Path to serving.duckdb
 QUANT_RISK_COOKIE_SECRET   — Secret for cookie signing (generate with secrets.token_hex(32))
 QUANT_RISK_CORS_ORIGINS    — Comma-separated list of allowed CORS origins
 QUANT_RISK_COOKIE_SECURE   — Set to "false" in local dev (default: true)
+QUANT_RISK_INTERNAL_TOKEN  — Shared bearer token for POST /api/internal/*
+                             (used by the off-box dev machine that produces
+                             predictions and pushes them to serving.duckdb).
+                             If unset or empty, the internal endpoints return
+                             503 — this is intentional so the RPi5 refuses
+                             writes until the token is explicitly configured.
 '''
 
 from __future__ import annotations
@@ -68,3 +74,6 @@ class AppConfig:
             for o in os.environ.get("QUANT_RISK_CORS_ORIGINS", "").split(",")
             if o.strip()
         ]
+        self.internal_token: str | None = (
+            os.environ.get("QUANT_RISK_INTERNAL_TOKEN") or None
+        )

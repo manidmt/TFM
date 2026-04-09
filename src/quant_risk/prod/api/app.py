@@ -32,7 +32,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from quant_risk.prod.api.config import AppConfig
-from quant_risk.prod.api.routers import admin, auth, health, private, public
+from quant_risk.prod.api.routers import admin, auth, health, internal, private, public
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +81,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     app.include_router(auth.router)
     app.include_router(private.router)
     app.include_router(admin.router)
+    app.include_router(internal.router)
 
     logger.info("quant-risk API app created.")
     return app

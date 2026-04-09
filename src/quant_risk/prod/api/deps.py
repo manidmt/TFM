@@ -28,8 +28,10 @@ from __future__ import annotations
 
 from typing import Generator
 
+import hmac
+
 import duckdb
-from fastapi import Cookie, Depends, HTTPException, Request, status
+from fastapi import Cookie, Depends, Header, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from quant_risk.prod.api.config import AppConfig
@@ -158,3 +160,51 @@ def require_admin(
             detail="Admin role required.",
         )
     return current_user
+
+
+# ---------------------------------------------------------------------------
+# Internal bearer-token auth (off-box prediction push)
+# ---------------------------------------------------------------------------
+
+def require_internal_token(
+    authorization: str | None = Header(default=None),
+    x_internal_token: str | None = Header(default=None, alias="X-Internal-Token"),
+    config: AppConfig = Depends(get_config),
+) -> None:
+    """Accept a shared bearer token from the off-box prediction producer.
+
+    The token is read from ``QUANT_RISK_INTERNAL_TOKEN`` at application start.
+    If the env var is unset or empty the endpoint returns **503** — the RPi5
+    intentionally refuses internal writes until the operator opts in by
+    configuring the token.
+
+    The header can be either:
+      * ``Authorization: Bearer <token>``  (preferred)
+      * ``X-Internal-Token: <token>``      (fallback for simpler clients)
+
+    Comparison uses ``hmac.compare_digest`` to avoid timing leaks.
+    """
+    expected = config.internal_token
+    if not expected:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Internal prediction push is disabled on this server "
+                "(QUANT_RISK_INTERNAL_TOKEN not configured)."
+            ),
+        )
+
+    presented: str | None = None
+    if authorization:
+        parts = authorization.split(None, 1)
+        if len(parts) == 2 and parts[0].lower() == "bearer":
+            presented = parts[1].strip()
+    if presented is None and x_internal_token:
+        presented = x_internal_token.strip()
+
+    if not presented or not hmac.compare_digest(presented, expected):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing internal token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
