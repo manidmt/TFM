@@ -160,7 +160,7 @@ def prices_history(
         """
         SELECT CAST(date AS VARCHAR) AS date, close
         FROM raw_prices
-        WHERE ticker = ? AND date >= ?
+        WHERE ticker = ? AND date >= ? AND close IS NOT NULL
         ORDER BY date ASC
         """,
         [asset.source_ticker, since],
