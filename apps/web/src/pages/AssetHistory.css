@@ -114,7 +114,7 @@
 /* Stats row */
 .stats-row {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: var(--space-3);
   margin-bottom: var(--space-4);
 }
@@ -235,3 +235,50 @@
 }
 
 .error-text { color: var(--high); font-style: normal; }
+
+/* Prediction history table */
+.pred-history-panel {
+  margin-top: var(--space-4);
+}
+
+.pred-history-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.75rem;
+}
+
+.pred-history-table th {
+  font-size: 0.6rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+  text-align: left;
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--line);
+}
+
+.pred-history-table td {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.72rem;
+  color: var(--text);
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--line);
+}
+
+.pred-history-table tr:last-child td {
+  border-bottom: none;
+}
+
+.regime-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+.regime-dot.low    { background: var(--low); }
+.regime-dot.medium { background: var(--medium); }
+.regime-dot.high   { background: var(--high); }

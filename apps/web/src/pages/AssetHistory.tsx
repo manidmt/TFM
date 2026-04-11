@@ -69,18 +69,6 @@ export default function AssetHistory() {
     };
   }, [realRegimes, range]);
 
-  const streak = useMemo(() => {
-    if (history.length === 0) return { days: 0, regime: 'medium' as VolatilityClass };
-    const sorted = [...history].sort((a, b) => b.forecast_date.localeCompare(a.forecast_date));
-    const cur = sorted[0].predicted_class as VolatilityClass;
-    let count = 0;
-    for (const h of sorted) {
-      if (h.predicted_class !== cur) break;
-      count++;
-    }
-    return { days: count, regime: cur };
-  }, [history]);
-
   const vol5d = useMemo((): Record<VolatilityClass, number> => {
     if (!volProfile) return FALLBACK_VOL_5D;
     return { low: volProfile.vol_5d_low, medium: volProfile.vol_5d_medium, high: volProfile.vol_5d_high };
@@ -149,13 +137,6 @@ export default function AssetHistory() {
           {/* Stats row */}
           <div className="stats-row">
             <div className="stat-card">
-              <div className="stat-label">Current streak</div>
-              <div className="stat-value" style={{ color: `var(--${streak.regime})` }}>
-                {streak.days} days
-              </div>
-              <div className="stat-sub">in {streak.regime.toUpperCase()} regime</div>
-            </div>
-            <div className="stat-card">
               <div className="stat-label">Forecast band</div>
               <div className="stat-value">{forecastBand ? `±${forecastBand.pct}%` : '—'}</div>
               <div className="stat-sub">{forecastBand?.range ?? '5-day ±1.65σ'}</div>
@@ -216,6 +197,40 @@ export default function AssetHistory() {
               </div>
             </div>
           </div>
+
+          {/* Prediction history table */}
+          {history.length > 0 && (
+            <div className="panel-card pred-history-panel">
+              <div className="panel-title">Prediction history</div>
+              <table className="pred-history-table">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Signal</th>
+                    <th>P(low)</th>
+                    <th>P(med)</th>
+                    <th>P(high)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...history]
+                    .sort((a, b) => b.forecast_date.localeCompare(a.forecast_date))
+                    .map((h) => (
+                      <tr key={h.forecast_date}>
+                        <td>{h.forecast_date}</td>
+                        <td>
+                          <span className={`regime-dot ${h.predicted_class}`} />
+                          {h.predicted_class}
+                        </td>
+                        <td>{(h.p_low * 100).toFixed(1)}%</td>
+                        <td>{(h.p_medium * 100).toFixed(1)}%</td>
+                        <td>{(h.p_high * 100).toFixed(1)}%</td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </>
       )}
 
