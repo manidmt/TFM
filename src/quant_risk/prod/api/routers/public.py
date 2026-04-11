@@ -189,10 +189,10 @@ def regimes_history(
 ):
     """Return the realised volatility regime for each trading day.
 
-    Regime labels are computed from 5-day forward realised volatility
-    (``labels_regime.vol_fwd``) using per-ticker tercile thresholds over
-    the full history.  This gives the *actual* regime that was observed,
-    not a model prediction.
+    Regime is based on **backward-looking** 5-day realised volatility
+    (stddev of log-returns over the previous 5 trading days), computed
+    directly from ``raw_prices``.  Tercile thresholds are calculated
+    over the full price history so that ~1/3 of days fall in each tier.
     """
     try:
         catalog = load_asset_catalog(_ASSETS_CONFIG)
@@ -212,26 +212,38 @@ def regimes_history(
     since = date.today() - timedelta(days=days)
     rows = research_db.execute(
         """
-        WITH thresholds AS (
-            SELECT
-                approx_quantile(vol_fwd, 0.333) AS q33,
-                approx_quantile(vol_fwd, 0.667) AS q67
-            FROM labels_regime
-            WHERE ticker = ? AND horizon = 5
+        WITH log_ret AS (
+            SELECT date,
+                   LN(close / LAG(close) OVER (ORDER BY date)) AS lr
+            FROM raw_prices
+            WHERE ticker = ? AND close IS NOT NULL
+        ),
+        rv5 AS (
+            SELECT date,
+                   STDDEV(lr) OVER (ORDER BY date ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) AS rv
+            FROM log_ret
+        ),
+        rv5_valid AS (
+            SELECT date, rv FROM rv5 WHERE rv IS NOT NULL
+        ),
+        thresholds AS (
+            SELECT approx_quantile(rv, 0.333) AS q33,
+                   approx_quantile(rv, 0.667) AS q67
+            FROM rv5_valid
         )
         SELECT
-            CAST(lr.date AS VARCHAR) AS date,
+            CAST(r.date AS VARCHAR) AS date,
             CASE
-                WHEN lr.vol_fwd <= t.q33 THEN 'low'
-                WHEN lr.vol_fwd <= t.q67 THEN 'medium'
+                WHEN r.rv <= t.q33 THEN 'low'
+                WHEN r.rv <= t.q67 THEN 'medium'
                 ELSE 'high'
             END AS regime
-        FROM labels_regime lr
+        FROM rv5_valid r
         CROSS JOIN thresholds t
-        WHERE lr.ticker = ? AND lr.horizon = 5 AND lr.date >= ?
-        ORDER BY lr.date ASC
+        WHERE r.date >= ?
+        ORDER BY r.date ASC
         """,
-        [asset.source_ticker, asset.source_ticker, since],
+        [asset.source_ticker, since],
     ).fetchall()
 
     return [RegimePoint(date=r[0], regime=r[1]) for r in rows]
@@ -244,8 +256,9 @@ def vol_profile(
 ):
     """Return the median 5-day realised volatility per regime tier.
 
-    Used by the frontend to draw a correctly calibrated forecast band
-    instead of relying on hardcoded annualised vol assumptions.
+    Uses backward-looking 5-day realised vol from ``raw_prices`` with
+    the same tercile thresholds as ``/regimes/history``.  This keeps
+    the forecast band calibration consistent with the regime overlay.
     """
     try:
         catalog = load_asset_catalog(_ASSETS_CONFIG)
@@ -258,21 +271,31 @@ def vol_profile(
 
     row = research_db.execute(
         """
-        WITH thresholds AS (
-            SELECT approx_quantile(vol_fwd, 0.333) AS q33,
-                   approx_quantile(vol_fwd, 0.667) AS q67
-            FROM labels_regime WHERE ticker = ? AND horizon = 5
+        WITH log_ret AS (
+            SELECT date,
+                   LN(close / LAG(close) OVER (ORDER BY date)) AS lr
+            FROM raw_prices
+            WHERE ticker = ? AND close IS NOT NULL
+        ),
+        rv5 AS (
+            SELECT date,
+                   STDDEV(lr) OVER (ORDER BY date ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) AS rv
+            FROM log_ret
+        ),
+        rv5_valid AS (
+            SELECT rv FROM rv5 WHERE rv IS NOT NULL
+        ),
+        thresholds AS (
+            SELECT approx_quantile(rv, 0.333) AS q33,
+                   approx_quantile(rv, 0.667) AS q67
+            FROM rv5_valid
         )
         SELECT
-            (SELECT median(vol_fwd) FROM labels_regime lr, thresholds t
-             WHERE lr.ticker = ? AND lr.horizon = 5 AND lr.vol_fwd <= t.q33),
-            (SELECT median(vol_fwd) FROM labels_regime lr, thresholds t
-             WHERE lr.ticker = ? AND lr.horizon = 5
-             AND lr.vol_fwd > t.q33 AND lr.vol_fwd <= t.q67),
-            (SELECT median(vol_fwd) FROM labels_regime lr, thresholds t
-             WHERE lr.ticker = ? AND lr.horizon = 5 AND lr.vol_fwd > t.q67)
+            (SELECT median(rv) FROM rv5_valid, thresholds WHERE rv <= q33),
+            (SELECT median(rv) FROM rv5_valid, thresholds WHERE rv > q33 AND rv <= q67),
+            (SELECT median(rv) FROM rv5_valid, thresholds WHERE rv > q67)
         """,
-        [asset.source_ticker] * 4,
+        [asset.source_ticker],
     ).fetchone()
 
     if row is None or row[0] is None:
