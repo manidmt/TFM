@@ -1,11 +1,12 @@
 // apps/web/src/components/PriceRegimeChart.tsx
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { PredictionOut, PricePoint, VolatilityClass } from '../api/types';
+import type { PredictionOut, PricePoint, RegimePoint, VolatilityClass } from '../api/types';
 
 interface Props {
   prices: PricePoint[];
-  regimes: PredictionOut[];         // prediction history, any order — component sorts by date
+  realRegimes: RegimePoint[];       // actual realised volatility regimes from labels_regime
   latestPred: PredictionOut | null;
+  vol5d: Record<VolatilityClass, number>;  // per-asset 5-day median vol per regime tier
 }
 
 type Range = '1M' | '3M' | '6M' | '1Y';
@@ -17,14 +18,8 @@ const COLOR: Record<VolatilityClass, string> = {
   high: '#9a5246',
 };
 const ACCENT = '#21384d';
-// Annualised vol per regime (used for forecast band)
-const VOL_ANN: Record<VolatilityClass, number> = { low: 0.12, medium: 0.22, high: 0.40 };
 
-function sigmaWeighted(pred: PredictionOut): number {
-  return pred.p_low * VOL_ANN.low + pred.p_medium * VOL_ANN.medium + pred.p_high * VOL_ANN.high;
-}
-
-export default function PriceRegimeChart({ prices, regimes, latestPred }: Props) {
+export default function PriceRegimeChart({ prices, realRegimes, latestPred, vol5d }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [range, setRange] = useState<Range>('6M');
 
@@ -36,17 +31,17 @@ export default function PriceRegimeChart({ prices, regimes, latestPred }: Props)
     return prices.filter((p) => new Date(p.date) >= cutoff);
   }, [prices, range]);
 
-  // Build regime map: date string → VolatilityClass (carry-forward for missing days)
+  // Build regime map from realised volatility labels (actual, not predictions)
   const regimeByDate = useMemo(() => {
-    const sorted = [...regimes].sort((a, b) => a.forecast_date.localeCompare(b.forecast_date));
     const map = new Map<string, VolatilityClass>();
-    sorted.forEach((r) => map.set(r.forecast_date, r.predicted_class as VolatilityClass));
+    realRegimes.forEach((r) => map.set(r.date, r.regime as VolatilityClass));
     return map;
-  }, [regimes]);
+  }, [realRegimes]);
 
-  // Assign a regime to each price point using carry-forward
-  const points = useMemo((): Array<{ date: string; close: number; regime: VolatilityClass }> => {
-    let last: VolatilityClass = 'medium';
+  // Assign real regime to each price point using carry-forward.
+  // Dates before the earliest regime label get regime=null (no background band).
+  const points = useMemo((): Array<{ date: string; close: number; regime: VolatilityClass | null }> => {
+    let last: VolatilityClass | null = null;
     return filtered.map((p) => {
       const r = regimeByDate.get(p.date);
       if (r) last = r;
@@ -76,11 +71,13 @@ export default function PriceRegimeChart({ prices, regimes, latestPred }: Props)
       const cH = H - PAD.top - PAD.bottom;
       const N = points.length;
 
-      // Forecast band
+      // Forecast band — uses per-asset 5-day vol from labels_regime
       let bandHi = 0, bandLo = 0;
       if (latestPred) {
-        const sigAnn = sigmaWeighted(latestPred);
-        const sig5 = (sigAnn / Math.sqrt(252)) * Math.sqrt(HORIZON);
+        const sig5 =
+          latestPred.p_low * vol5d.low +
+          latestPred.p_medium * vol5d.medium +
+          latestPred.p_high * vol5d.high;
         const last = points[N - 1].close;
         bandHi = last * Math.exp(1.65 * sig5);
         bandLo = last * Math.exp(-1.65 * sig5);
@@ -106,12 +103,15 @@ export default function PriceRegimeChart({ prices, regimes, latestPred }: Props)
         ctx.stroke();
       }
 
-      // Regime backgrounds (batch by consecutive same regime)
+      // Regime backgrounds (batch by consecutive same regime, skip null)
       let segStart = 0;
       for (let i = 1; i <= N; i++) {
         if (i === N || points[i].regime !== points[segStart].regime) {
-          ctx.fillStyle = COLOR[points[segStart].regime] + '26';
-          ctx.fillRect(px(segStart), PAD.top, px(Math.min(i, N - 1)) - px(segStart) + 1, cH);
+          const regime = points[segStart].regime;
+          if (regime) {
+            ctx.fillStyle = COLOR[regime] + '26';
+            ctx.fillRect(px(segStart), PAD.top, px(Math.min(i, N - 1)) - px(segStart) + 1, cH);
+          }
           segStart = i;
         }
       }
@@ -200,7 +200,7 @@ export default function PriceRegimeChart({ prices, regimes, latestPred }: Props)
     const ro = new ResizeObserver(render);
     ro.observe(canvas);
     return () => ro.disconnect();
-  }, [points, latestPred, range]);
+  }, [points, latestPred, range, vol5d]);
 
   return (
     <div>
@@ -229,15 +229,15 @@ export default function PriceRegimeChart({ prices, regimes, latestPred }: Props)
       <div className="chart-legend">
         <span className="legend-item">
           <span className="legend-sq" style={{ background: '#4f7a6426', border: '1px solid #4f7a6460' }} />
-          Low regime
+          Low (realised)
         </span>
         <span className="legend-item">
           <span className="legend-sq" style={{ background: '#a57a2a26', border: '1px solid #a57a2a60' }} />
-          Medium regime
+          Medium (realised)
         </span>
         <span className="legend-item">
           <span className="legend-sq" style={{ background: '#9a524626', border: '1px solid #9a524660' }} />
-          High regime
+          High (realised)
         </span>
         <span className="legend-item">
           <span className="legend-line" />

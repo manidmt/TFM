@@ -74,6 +74,18 @@ class PricePoint(BaseModel):
     close: float
 
 
+class RegimePoint(BaseModel):
+    date: str
+    regime: str  # 'low' | 'medium' | 'high'
+
+
+class VolProfile(BaseModel):
+    asset_id: str
+    vol_5d_low: float
+    vol_5d_medium: float
+    vol_5d_high: float
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -167,3 +179,108 @@ def prices_history(
     ).fetchall()
 
     return [PricePoint(date=r[0], close=r[1]) for r in rows]
+
+
+@router.get("/regimes/history", response_model=list[RegimePoint])
+def regimes_history(
+    asset_id: str = Query(..., description="Production asset ID"),
+    days: int = Query(180, ge=30, le=730, description="Lookback window in calendar days"),
+    research_db: duckdb.DuckDBPyConnection = Depends(get_research_db),
+):
+    """Return the realised volatility regime for each trading day.
+
+    Regime labels are computed from 5-day forward realised volatility
+    (``labels_regime.vol_fwd``) using per-ticker tercile thresholds over
+    the full history.  This gives the *actual* regime that was observed,
+    not a model prediction.
+    """
+    try:
+        catalog = load_asset_catalog(_ASSETS_CONFIG)
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Asset '{asset_id}' not found.",
+        )
+
+    asset = next((a for a in catalog if a.asset_id == asset_id), None)
+    if asset is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Asset '{asset_id}' not found.",
+        )
+
+    since = date.today() - timedelta(days=days)
+    rows = research_db.execute(
+        """
+        WITH thresholds AS (
+            SELECT
+                approx_quantile(vol_fwd, 0.333) AS q33,
+                approx_quantile(vol_fwd, 0.667) AS q67
+            FROM labels_regime
+            WHERE ticker = ? AND horizon = 5
+        )
+        SELECT
+            CAST(lr.date AS VARCHAR) AS date,
+            CASE
+                WHEN lr.vol_fwd <= t.q33 THEN 'low'
+                WHEN lr.vol_fwd <= t.q67 THEN 'medium'
+                ELSE 'high'
+            END AS regime
+        FROM labels_regime lr
+        CROSS JOIN thresholds t
+        WHERE lr.ticker = ? AND lr.horizon = 5 AND lr.date >= ?
+        ORDER BY lr.date ASC
+        """,
+        [asset.source_ticker, asset.source_ticker, since],
+    ).fetchall()
+
+    return [RegimePoint(date=r[0], regime=r[1]) for r in rows]
+
+
+@router.get("/vol-profile", response_model=VolProfile)
+def vol_profile(
+    asset_id: str = Query(..., description="Production asset ID"),
+    research_db: duckdb.DuckDBPyConnection = Depends(get_research_db),
+):
+    """Return the median 5-day realised volatility per regime tier.
+
+    Used by the frontend to draw a correctly calibrated forecast band
+    instead of relying on hardcoded annualised vol assumptions.
+    """
+    try:
+        catalog = load_asset_catalog(_ASSETS_CONFIG)
+    except FileNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found.")
+
+    asset = next((a for a in catalog if a.asset_id == asset_id), None)
+    if asset is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found.")
+
+    row = research_db.execute(
+        """
+        WITH thresholds AS (
+            SELECT approx_quantile(vol_fwd, 0.333) AS q33,
+                   approx_quantile(vol_fwd, 0.667) AS q67
+            FROM labels_regime WHERE ticker = ? AND horizon = 5
+        )
+        SELECT
+            (SELECT median(vol_fwd) FROM labels_regime lr, thresholds t
+             WHERE lr.ticker = ? AND lr.horizon = 5 AND lr.vol_fwd <= t.q33),
+            (SELECT median(vol_fwd) FROM labels_regime lr, thresholds t
+             WHERE lr.ticker = ? AND lr.horizon = 5
+             AND lr.vol_fwd > t.q33 AND lr.vol_fwd <= t.q67),
+            (SELECT median(vol_fwd) FROM labels_regime lr, thresholds t
+             WHERE lr.ticker = ? AND lr.horizon = 5 AND lr.vol_fwd > t.q67)
+        """,
+        [asset.source_ticker] * 4,
+    ).fetchone()
+
+    if row is None or row[0] is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No vol data.")
+
+    return VolProfile(
+        asset_id=asset_id,
+        vol_5d_low=row[0],
+        vol_5d_medium=row[1],
+        vol_5d_high=row[2],
+    )

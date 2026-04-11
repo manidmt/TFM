@@ -2,18 +2,21 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { api } from '../api/client';
-import type { PredictionOut, PricePoint, VolatilityClass } from '../api/types';
+import type { PredictionOut, PricePoint, RegimePoint, VolatilityClass, VolProfile } from '../api/types';
 import SignalBadge from '../components/SignalBadge';
 import ProbPills from '../components/ProbPills';
 import PriceRegimeChart from '../components/PriceRegimeChart';
 import './AssetHistory.css';
 
-const VOL_ANN: Record<VolatilityClass, number> = { low: 0.12, medium: 0.22, high: 0.40 };
+// Fallback 5-day vol values (conservative); overridden by per-asset vol-profile from API.
+const FALLBACK_VOL_5D: Record<VolatilityClass, number> = { low: 0.005, medium: 0.008, high: 0.014 };
 
 export default function AssetHistory() {
   const { assetId } = useParams<{ assetId: string }>();
   const [prices, setPrices] = useState<PricePoint[]>([]);
   const [history, setHistory] = useState<PredictionOut[]>([]);
+  const [realRegimes, setRealRegimes] = useState<RegimePoint[]>([]);
+  const [volProfile, setVolProfile] = useState<VolProfile | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -24,11 +27,15 @@ export default function AssetHistory() {
     Promise.all([
       api.get<PricePoint[]>(`/api/public/prices/history?asset_id=${assetId}&days=365`),
       api.get<PredictionOut[]>(`/api/public/predictions/history?asset_id=${assetId}&limit=365`),
+      api.get<RegimePoint[]>(`/api/public/regimes/history?asset_id=${assetId}&days=365`),
+      api.get<VolProfile>(`/api/public/vol-profile?asset_id=${assetId}`),
     ])
-      .then(([p, h]) => {
+      .then(([p, h, r, v]) => {
         if (cancelled) return;
         setPrices(p);
         setHistory(h);
+        setRealRegimes(r);
+        setVolProfile(v);
       })
       .catch(() => {
         if (!cancelled) setError('Failed to load asset data.');
@@ -70,20 +77,24 @@ export default function AssetHistory() {
     return { days: count, regime: cur };
   }, [history]);
 
+  const vol5d = useMemo((): Record<VolatilityClass, number> => {
+    if (!volProfile) return FALLBACK_VOL_5D;
+    return { low: volProfile.vol_5d_low, medium: volProfile.vol_5d_medium, high: volProfile.vol_5d_high };
+  }, [volProfile]);
+
   const forecastBand = useMemo(() => {
     if (!latestPred || prices.length === 0) return null;
     const lastClose = prices[prices.length - 1].close;
-    const sigAnn =
-      latestPred.p_low * VOL_ANN.low +
-      latestPred.p_medium * VOL_ANN.medium +
-      latestPred.p_high * VOL_ANN.high;
-    const sig5 = (sigAnn / Math.sqrt(252)) * Math.sqrt(5);
+    const sig5 =
+      latestPred.p_low * vol5d.low +
+      latestPred.p_medium * vol5d.medium +
+      latestPred.p_high * vol5d.high;
     const hi = lastClose * Math.exp(1.65 * sig5);
     const lo = lastClose * Math.exp(-1.65 * sig5);
     const pct = ((hi / lastClose - 1) * 100).toFixed(1);
     const fmt = (v: number) => v >= 1000 ? `$${(v / 1000).toFixed(1)}k` : `$${v.toFixed(2)}`;
     return { pct, range: `${fmt(lo)} – ${fmt(hi)}` };
-  }, [latestPred, prices]);
+  }, [latestPred, prices, vol5d]);
 
   const periodReturn = useMemo(() => {
     if (prices.length < 2) return null;
@@ -123,8 +134,9 @@ export default function AssetHistory() {
           <div className="chart-card">
             <PriceRegimeChart
               prices={prices}
-              regimes={history}
+              realRegimes={realRegimes}
               latestPred={latestPred}
+              vol5d={vol5d}
             />
           </div>
 

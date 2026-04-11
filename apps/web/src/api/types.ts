@@ -22,6 +22,18 @@ export interface PricePoint {
   close: number;
 }
 
+export interface RegimePoint {
+  date: string;
+  regime: VolatilityClass;
+}
+
+export interface VolProfile {
+  asset_id: string;
+  vol_5d_low: number;
+  vol_5d_medium: number;
+  vol_5d_high: number;
+}
+
 export interface UserOut {
   user_id: string;
   email: string;
