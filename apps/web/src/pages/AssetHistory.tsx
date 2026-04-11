@@ -54,16 +54,16 @@ export default function AssetHistory() {
 
   const dist = useMemo(() => {
     const counts = { low: 0, medium: 0, high: 0 };
-    history.forEach((h) => {
-      counts[h.predicted_class as VolatilityClass]++;
+    realRegimes.forEach((r) => {
+      counts[r.regime as VolatilityClass]++;
     });
-    const total = history.length || 1;
+    const total = realRegimes.length || 1;
     return {
       low: Math.round((counts.low / total) * 100),
       medium: Math.round((counts.medium / total) * 100),
       high: 100 - Math.round((counts.low / total) * 100) - Math.round((counts.medium / total) * 100),
     };
-  }, [history]);
+  }, [realRegimes]);
 
   const streak = useMemo(() => {
     if (history.length === 0) return { days: 0, regime: 'medium' as VolatilityClass };

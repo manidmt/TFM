@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api/client';
-import type { AssetOut, PredictionOut, VolatilityClass } from '../api/types';
+import type { AssetOut, PredictionOut, RegimePoint, VolatilityClass } from '../api/types';
 import SignalBadge from '../components/SignalBadge';
 import ProbPills from '../components/ProbPills';
 import RegimeSparkline from '../components/RegimeSparkline';
@@ -30,12 +30,12 @@ export default function Predictions() {
         Promise.all(
           a.map((asset) =>
             api
-              .get<PredictionOut[]>(
-                `/api/public/predictions/history?asset_id=${asset.asset_id}&limit=30`,
+              .get<RegimePoint[]>(
+                `/api/public/regimes/history?asset_id=${asset.asset_id}&days=45`,
               )
               .then((rows) => ({
                 asset_id: asset.asset_id,
-                regimes: rows.map((r) => r.predicted_class),
+                regimes: rows.map((r) => r.regime as VolatilityClass),
               }))
               .catch(() => ({ asset_id: asset.asset_id, regimes: [] as VolatilityClass[] })),
           ),
