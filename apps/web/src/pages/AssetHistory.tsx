@@ -5,7 +5,7 @@ import { api } from '../api/client';
 import type { PredictionOut, PricePoint, RegimePoint, VolatilityClass, VolProfile } from '../api/types';
 import SignalBadge from '../components/SignalBadge';
 import ProbPills from '../components/ProbPills';
-import PriceRegimeChart from '../components/PriceRegimeChart';
+import PriceRegimeChart, { type Range, RANGE_DAYS } from '../components/PriceRegimeChart';
 import './AssetHistory.css';
 
 // Fallback 5-day vol values (conservative); overridden by per-asset vol-profile from API.
@@ -19,6 +19,7 @@ export default function AssetHistory() {
   const [volProfile, setVolProfile] = useState<VolProfile | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [range, setRange] = useState<Range>('6M');
 
   useEffect(() => {
     if (!assetId) return;
@@ -53,17 +54,20 @@ export default function AssetHistory() {
   }, [history]);
 
   const dist = useMemo(() => {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - RANGE_DAYS[range]);
+    const filtered = realRegimes.filter((r) => new Date(r.date) >= cutoff);
     const counts = { low: 0, medium: 0, high: 0 };
-    realRegimes.forEach((r) => {
+    filtered.forEach((r) => {
       counts[r.regime as VolatilityClass]++;
     });
-    const total = realRegimes.length || 1;
+    const total = filtered.length || 1;
     return {
       low: Math.round((counts.low / total) * 100),
       medium: Math.round((counts.medium / total) * 100),
       high: 100 - Math.round((counts.low / total) * 100) - Math.round((counts.medium / total) * 100),
     };
-  }, [realRegimes]);
+  }, [realRegimes, range]);
 
   const streak = useMemo(() => {
     if (history.length === 0) return { days: 0, regime: 'medium' as VolatilityClass };
@@ -99,13 +103,13 @@ export default function AssetHistory() {
   const periodReturn = useMemo(() => {
     if (prices.length < 2) return null;
     const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - 180);
+    cutoff.setDate(cutoff.getDate() - RANGE_DAYS[range]);
     const old = prices.find((p) => new Date(p.date) >= cutoff);
     if (!old) return null;
     const last = prices[prices.length - 1];
     const ret = ((last.close / old.close - 1) * 100).toFixed(1);
     return { value: parseFloat(ret), label: ret };
-  }, [prices]);
+  }, [prices, range]);
 
   const lastPrice = prices.length > 0 ? prices[prices.length - 1] : null;
   const regimeClass = latestPred ? `regime-${latestPred.predicted_class}` : '';
@@ -137,6 +141,8 @@ export default function AssetHistory() {
               realRegimes={realRegimes}
               latestPred={latestPred}
               vol5d={vol5d}
+              range={range}
+              onRangeChange={setRange}
             />
           </div>
 
@@ -166,14 +172,14 @@ export default function AssetHistory() {
               <div className="stat-sub">{lastPrice?.date ?? ''}</div>
             </div>
             <div className="stat-card">
-              <div className="stat-label">6M return</div>
+              <div className="stat-label">{range} return</div>
               <div
                 className="stat-value"
                 style={{ color: periodReturn && periodReturn.value >= 0 ? 'var(--low)' : 'var(--high)' }}
               >
                 {periodReturn ? `${periodReturn.value >= 0 ? '+' : ''}${periodReturn.label}%` : '—'}
               </div>
-              <div className="stat-sub">vs 6 months ago</div>
+              <div className="stat-sub">vs {RANGE_DAYS[range]} days ago</div>
             </div>
           </div>
 

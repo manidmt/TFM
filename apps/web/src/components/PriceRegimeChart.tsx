@@ -1,16 +1,18 @@
 // apps/web/src/components/PriceRegimeChart.tsx
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import type { PredictionOut, PricePoint, RegimePoint, VolatilityClass } from '../api/types';
+
+export type Range = '1M' | '3M' | '6M' | '1Y';
+export const RANGE_DAYS: Record<Range, number> = { '1M': 30, '3M': 90, '6M': 180, '1Y': 365 };
 
 interface Props {
   prices: PricePoint[];
   realRegimes: RegimePoint[];       // actual realised volatility regimes from labels_regime
   latestPred: PredictionOut | null;
   vol5d: Record<VolatilityClass, number>;  // per-asset 5-day median vol per regime tier
+  range: Range;
+  onRangeChange: (r: Range) => void;
 }
-
-type Range = '1M' | '3M' | '6M' | '1Y';
-const RANGE_DAYS: Record<Range, number> = { '1M': 30, '3M': 90, '6M': 180, '1Y': 365 };
 
 const COLOR: Record<VolatilityClass, string> = {
   low: '#4f7a64',
@@ -19,9 +21,8 @@ const COLOR: Record<VolatilityClass, string> = {
 };
 const ACCENT = '#21384d';
 
-export default function PriceRegimeChart({ prices, realRegimes, latestPred, vol5d }: Props) {
+export default function PriceRegimeChart({ prices, realRegimes, latestPred, vol5d, range, onRangeChange }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [range, setRange] = useState<Range>('6M');
 
   // Filter prices to selected range
   const filtered = useMemo(() => {
@@ -212,7 +213,7 @@ export default function PriceRegimeChart({ prices, realRegimes, latestPred, vol5
             <button
               key={r}
               className={`range-pill${range === r ? ' active' : ''}`}
-              onClick={() => setRange(r)}
+              onClick={() => onRangeChange(r)}
             >
               {r}
             </button>
