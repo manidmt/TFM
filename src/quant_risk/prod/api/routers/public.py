@@ -38,6 +38,7 @@ from pydantic import BaseModel
 from quant_risk.prod.api.deps import get_research_db, get_serving_db
 from quant_risk.prod.assets import load_asset_catalog
 from quant_risk.prod.serving.duckdb import ServingDB
+from quant_risk.prod.ticker_universe import load_ticker_universe
 from quant_risk.prod.serving.predictions import (
     get_all_latest_predictions,
     get_latest_prediction,
@@ -77,6 +78,13 @@ class PricePoint(BaseModel):
 class RegimePoint(BaseModel):
     date: str
     regime: str  # 'low' | 'medium' | 'high'
+
+
+class TickerOut(BaseModel):
+    ticker: str
+    display_name: str
+    asset_class: str
+    proxy_asset_id: str
 
 
 class VolProfile(BaseModel):
@@ -120,6 +128,33 @@ def list_assets():
         )
         for a in catalog
     ]
+
+
+_TICKER_UNIVERSE_PATH = "config/prod/ticker_universe.yaml"
+
+# Cache the ticker universe in memory — it never changes at runtime.
+_ticker_cache: list[TickerOut] | None = None
+
+
+@router.get("/tickers", response_model=list[TickerOut])
+def list_tickers():
+    """Return the full ticker universe for portfolio autocomplete."""
+    global _ticker_cache
+    if _ticker_cache is None:
+        try:
+            universe = load_ticker_universe(_TICKER_UNIVERSE_PATH)
+        except FileNotFoundError:
+            return []
+        _ticker_cache = [
+            TickerOut(
+                ticker=t.ticker,
+                display_name=t.display_name,
+                asset_class=t.asset_class,
+                proxy_asset_id=t.proxy_asset_id,
+            )
+            for t in universe
+        ]
+    return _ticker_cache
 
 
 @router.get("/predictions/latest", response_model=list[PredictionOut])

@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { api, ApiError } from '../../api/client';
-import type { PortfolioDetailOut, AssetOut, PortfolioAnalysisOut } from '../../api/types';
+import type { PortfolioDetailOut, AssetOut, PortfolioAnalysisOut, TickerOut } from '../../api/types';
 import SignalBadge from '../../components/SignalBadge';
 import ProbBar from '../../components/ProbBar';
+import TickerCombobox from '../../components/TickerCombobox';
 import './PortfolioDetail.css';
 
 interface EditablePosition {
@@ -22,6 +23,7 @@ export default function PortfolioDetail() {
 
   const [portfolio, setPortfolio] = useState<PortfolioDetailOut | null>(null);
   const [assets, setAssets] = useState<AssetOut[]>([]);
+  const [tickers, setTickers] = useState<TickerOut[]>([]);
   const [positions, setPositions] = useState<EditablePosition[]>([]);
   const [editName, setEditName] = useState('');
   const [editMode, setEditMode] = useState(false);
@@ -37,11 +39,13 @@ export default function PortfolioDetail() {
     Promise.all([
       api.get<PortfolioDetailOut>(`/api/private/portfolios/${portfolioId}`),
       api.get<AssetOut[]>('/api/public/assets'),
-    ]).then(([p, a]) => {
+      api.get<TickerOut[]>('/api/public/tickers'),
+    ]).then(([p, a, t]) => {
       setPortfolio(p);
       setPositions(p.positions.map((pos) => ({ ...pos })));
       setEditName(p.name);
       setAssets(a);
+      setTickers(t);
     }).finally(() => setLoading(false));
   }, [portfolioId]);
 
@@ -155,11 +159,16 @@ export default function PortfolioDetail() {
             <div key={idx} className="position-row">
               {isEditing ? (
                 <>
-                  <input
-                    className="field-input pos-label"
-                    placeholder="Label"
+                  <TickerCombobox
+                    tickers={tickers}
                     value={pos.label}
-                    onChange={(e) => handlePositionChange(idx, 'label', e.target.value)}
+                    onChange={(ticker, proxyId) => {
+                      setPositions((prev) => prev.map((p, i) =>
+                        i === idx
+                          ? { ...p, label: ticker, ...(proxyId ? { proxy_asset_id: proxyId } : {}) }
+                          : p
+                      ));
+                    }}
                   />
                   <div style={{ position: 'relative' }}>
                     <input
@@ -249,11 +258,16 @@ export default function PortfolioDetail() {
               <div className="positions-list">
                 {whatIfPositions.map((pos, idx) => (
                   <div key={idx} className="position-row">
-                    <input
-                      className="field-input pos-label"
-                      placeholder="Label"
+                    <TickerCombobox
+                      tickers={tickers}
                       value={pos.label}
-                      onChange={(e) => setWhatIfPositions(prev => prev.map((p, i) => i === idx ? {...p, label: e.target.value} : p))}
+                      onChange={(ticker, proxyId) => {
+                        setWhatIfPositions((prev) => prev.map((p, i) =>
+                          i === idx
+                            ? { ...p, label: ticker, ...(proxyId ? { proxy_asset_id: proxyId } : {}) }
+                            : p
+                        ));
+                      }}
                     />
                     <div style={{ position: 'relative' }}>
                       <input

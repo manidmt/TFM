@@ -34,6 +34,13 @@ export interface VolProfile {
   vol_5d_high: number;
 }
 
+export interface TickerOut {
+  ticker: string;
+  display_name: string;
+  asset_class: string;
+  proxy_asset_id: string;
+}
+
 export interface UserOut {
   user_id: string;
   email: string;

@@ -1,0 +1,269 @@
+# Ticker universe for portfolio autocomplete.
+#
+# Each entry maps a tradeable ticker to one of the 6 production proxy assets.
+# The proxy_asset_id determines which volatility regime prediction is used
+# when this ticker appears in a user portfolio.
+#
+# asset_class values: us_equity, euro_equity, crypto, bond_long, bond_short, commodity
+# proxy_asset_id values: us_equities, euro_equities, bitcoin, long_us_treasuries,
+#                        short_us_treasuries, gold
+
+version: "1.0.0"
+
+tickers:
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Production proxy indices & ETFs (the 6 core assets)
+  # ─────────────────────────────────────────────────────────────────────────────
+  - ticker: "^GSPC"
+    display_name: "S&P 500 Index"
+    asset_class: us_equity
+    proxy_asset_id: us_equities
+
+  - ticker: "^STOXX50E"
+    display_name: "EURO STOXX 50 Index"
+    asset_class: euro_equity
+    proxy_asset_id: euro_equities
+
+  - ticker: "BTC-USD"
+    display_name: "Bitcoin"
+    asset_class: crypto
+    proxy_asset_id: bitcoin
+
+  - ticker: "TLT"
+    display_name: "iShares 20+ Year Treasury Bond ETF"
+    asset_class: bond_long
+    proxy_asset_id: long_us_treasuries
+
+  - ticker: "SHY"
+    display_name: "iShares 1-3 Year Treasury Bond ETF"
+    asset_class: bond_short
+    proxy_asset_id: short_us_treasuries
+
+  - ticker: "GLD"
+    display_name: "SPDR Gold Shares"
+    asset_class: commodity
+    proxy_asset_id: gold
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # US Equities — Top S&P 500 components (~100)
+  # ─────────────────────────────────────────────────────────────────────────────
+  - { ticker: "AAPL",  display_name: "Apple Inc.",                    asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "MSFT",  display_name: "Microsoft Corp.",               asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "AMZN",  display_name: "Amazon.com Inc.",               asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "GOOGL", display_name: "Alphabet Inc. (Class A)",       asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "GOOG",  display_name: "Alphabet Inc. (Class C)",       asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "META",  display_name: "Meta Platforms Inc.",            asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "NVDA",  display_name: "NVIDIA Corp.",                  asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "TSLA",  display_name: "Tesla Inc.",                    asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "BRK-B", display_name: "Berkshire Hathaway (Class B)",  asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "JPM",   display_name: "JPMorgan Chase & Co.",          asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "V",     display_name: "Visa Inc.",                     asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "JNJ",   display_name: "Johnson & Johnson",             asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "UNH",   display_name: "UnitedHealth Group Inc.",       asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "XOM",   display_name: "Exxon Mobil Corp.",             asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "PG",    display_name: "Procter & Gamble Co.",          asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "MA",    display_name: "Mastercard Inc.",                asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "HD",    display_name: "Home Depot Inc.",                asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "CVX",   display_name: "Chevron Corp.",                  asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "MRK",   display_name: "Merck & Co. Inc.",              asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "ABBV",  display_name: "AbbVie Inc.",                    asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "LLY",   display_name: "Eli Lilly and Co.",             asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "PEP",   display_name: "PepsiCo Inc.",                  asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "KO",    display_name: "Coca-Cola Co.",                  asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "COST",  display_name: "Costco Wholesale Corp.",        asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "AVGO",  display_name: "Broadcom Inc.",                  asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "WMT",   display_name: "Walmart Inc.",                   asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "TMO",   display_name: "Thermo Fisher Scientific Inc.", asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "ADBE",  display_name: "Adobe Inc.",                     asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "CRM",   display_name: "Salesforce Inc.",                asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "NFLX",  display_name: "Netflix Inc.",                   asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "AMD",   display_name: "Advanced Micro Devices Inc.",   asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "INTC",  display_name: "Intel Corp.",                    asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "QCOM",  display_name: "Qualcomm Inc.",                 asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "CSCO",  display_name: "Cisco Systems Inc.",            asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "ORCL",  display_name: "Oracle Corp.",                   asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "ACN",   display_name: "Accenture plc",                 asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "TXN",   display_name: "Texas Instruments Inc.",        asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "NOW",   display_name: "ServiceNow Inc.",               asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "IBM",   display_name: "IBM Corp.",                      asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "INTU",  display_name: "Intuit Inc.",                    asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "AMAT",  display_name: "Applied Materials Inc.",        asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "AMGN",  display_name: "Amgen Inc.",                     asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "ISRG",  display_name: "Intuitive Surgical Inc.",       asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "GS",    display_name: "Goldman Sachs Group Inc.",      asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "MS",    display_name: "Morgan Stanley",                asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "BAC",   display_name: "Bank of America Corp.",         asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "WFC",   display_name: "Wells Fargo & Co.",             asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "C",     display_name: "Citigroup Inc.",                asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "BLK",   display_name: "BlackRock Inc.",                asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "SCHW",  display_name: "Charles Schwab Corp.",          asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "AXP",   display_name: "American Express Co.",          asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "DIS",   display_name: "Walt Disney Co.",               asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "CMCSA", display_name: "Comcast Corp.",                  asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "NKE",   display_name: "Nike Inc.",                      asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "MCD",   display_name: "McDonald's Corp.",               asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "SBUX",  display_name: "Starbucks Corp.",                asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "BA",    display_name: "Boeing Co.",                     asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "CAT",   display_name: "Caterpillar Inc.",               asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "DE",    display_name: "Deere & Co.",                    asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "GE",    display_name: "GE Aerospace",                  asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "RTX",   display_name: "RTX Corp.",                      asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "HON",   display_name: "Honeywell International Inc.",  asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "LMT",   display_name: "Lockheed Martin Corp.",         asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "UPS",   display_name: "United Parcel Service Inc.",    asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "UNP",   display_name: "Union Pacific Corp.",           asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "NEE",   display_name: "NextEra Energy Inc.",           asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "SO",    display_name: "Southern Co.",                   asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "DUK",   display_name: "Duke Energy Corp.",             asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "PFE",   display_name: "Pfizer Inc.",                    asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "BMY",   display_name: "Bristol-Myers Squibb Co.",      asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "GILD",  display_name: "Gilead Sciences Inc.",          asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "MDT",   display_name: "Medtronic plc",                 asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "ABT",   display_name: "Abbott Laboratories",           asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "DHR",   display_name: "Danaher Corp.",                  asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "SYK",   display_name: "Stryker Corp.",                  asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "COP",   display_name: "ConocoPhillips",                asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "EOG",   display_name: "EOG Resources Inc.",            asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "SLB",   display_name: "Schlumberger Ltd.",              asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "SPY",   display_name: "SPDR S&P 500 ETF Trust",       asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "QQQ",   display_name: "Invesco QQQ Trust (Nasdaq 100)", asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "IWM",   display_name: "iShares Russell 2000 ETF",     asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "DIA",   display_name: "SPDR Dow Jones Industrial ETF", asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "VOO",   display_name: "Vanguard S&P 500 ETF",         asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "VTI",   display_name: "Vanguard Total Stock Market ETF", asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "PYPL",  display_name: "PayPal Holdings Inc.",          asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "SQ",    display_name: "Block Inc.",                     asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "COIN",  display_name: "Coinbase Global Inc.",          asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "UBER",  display_name: "Uber Technologies Inc.",        asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "ABNB",  display_name: "Airbnb Inc.",                    asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "SHOP",  display_name: "Shopify Inc.",                   asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "SNOW",  display_name: "Snowflake Inc.",                 asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "PLTR",  display_name: "Palantir Technologies Inc.",    asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "MSTR",  display_name: "MicroStrategy Inc.",            asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "T",     display_name: "AT&T Inc.",                      asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "VZ",    display_name: "Verizon Communications Inc.",   asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "TMUS",  display_name: "T-Mobile US Inc.",               asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "PM",    display_name: "Philip Morris International",   asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "MO",    display_name: "Altria Group Inc.",              asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "CL",    display_name: "Colgate-Palmolive Co.",         asset_class: us_equity, proxy_asset_id: us_equities }
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # European Equities — EURO STOXX 50 components + major UK (~30)
+  # ─────────────────────────────────────────────────────────────────────────────
+  - { ticker: "SAP",     display_name: "SAP SE",                       asset_class: euro_equity, proxy_asset_id: euro_equities }
+  - { ticker: "ASML",    display_name: "ASML Holding NV",              asset_class: euro_equity, proxy_asset_id: euro_equities }
+  - { ticker: "MC.PA",   display_name: "LVMH Moet Hennessy",          asset_class: euro_equity, proxy_asset_id: euro_equities }
+  - { ticker: "OR.PA",   display_name: "L'Oreal SA",                  asset_class: euro_equity, proxy_asset_id: euro_equities }
+  - { ticker: "SIE.DE",  display_name: "Siemens AG",                  asset_class: euro_equity, proxy_asset_id: euro_equities }
+  - { ticker: "ALV.DE",  display_name: "Allianz SE",                  asset_class: euro_equity, proxy_asset_id: euro_equities }
+  - { ticker: "TTE.PA",  display_name: "TotalEnergies SE",            asset_class: euro_equity, proxy_asset_id: euro_equities }
+  - { ticker: "SAN.PA",  display_name: "Sanofi SA",                   asset_class: euro_equity, proxy_asset_id: euro_equities }
+  - { ticker: "AI.PA",   display_name: "Air Liquide SA",              asset_class: euro_equity, proxy_asset_id: euro_equities }
+  - { ticker: "BNP.PA",  display_name: "BNP Paribas SA",              asset_class: euro_equity, proxy_asset_id: euro_equities }
+  - { ticker: "DTE.DE",  display_name: "Deutsche Telekom AG",         asset_class: euro_equity, proxy_asset_id: euro_equities }
+  - { ticker: "ABI.BR",  display_name: "Anheuser-Busch InBev SA",     asset_class: euro_equity, proxy_asset_id: euro_equities }
+  - { ticker: "IBE.MC",  display_name: "Iberdrola SA",                asset_class: euro_equity, proxy_asset_id: euro_equities }
+  - { ticker: "SAN.MC",  display_name: "Banco Santander SA",          asset_class: euro_equity, proxy_asset_id: euro_equities }
+  - { ticker: "BBVA.MC", display_name: "BBVA SA",                     asset_class: euro_equity, proxy_asset_id: euro_equities }
+  - { ticker: "ITX.MC",  display_name: "Inditex SA",                  asset_class: euro_equity, proxy_asset_id: euro_equities }
+  - { ticker: "TEF.MC",  display_name: "Telefonica SA",               asset_class: euro_equity, proxy_asset_id: euro_equities }
+  - { ticker: "ENEL.MI", display_name: "Enel SpA",                    asset_class: euro_equity, proxy_asset_id: euro_equities }
+  - { ticker: "ISP.MI",  display_name: "Intesa Sanpaolo SpA",         asset_class: euro_equity, proxy_asset_id: euro_equities }
+  - { ticker: "ENI.MI",  display_name: "Eni SpA",                     asset_class: euro_equity, proxy_asset_id: euro_equities }
+  - { ticker: "INGA.AS", display_name: "ING Groep NV",                asset_class: euro_equity, proxy_asset_id: euro_equities }
+  - { ticker: "PHIA.AS", display_name: "Koninklijke Philips NV",      asset_class: euro_equity, proxy_asset_id: euro_equities }
+  - { ticker: "ADS.DE",  display_name: "adidas AG",                   asset_class: euro_equity, proxy_asset_id: euro_equities }
+  - { ticker: "MBG.DE",  display_name: "Mercedes-Benz Group AG",      asset_class: euro_equity, proxy_asset_id: euro_equities }
+  - { ticker: "BMW.DE",  display_name: "Bayerische Motoren Werke AG", asset_class: euro_equity, proxy_asset_id: euro_equities }
+  - { ticker: "VOW3.DE", display_name: "Volkswagen AG (Pref.)",       asset_class: euro_equity, proxy_asset_id: euro_equities }
+  - { ticker: "MUV2.DE", display_name: "Munich Re",                   asset_class: euro_equity, proxy_asset_id: euro_equities }
+  - { ticker: "DBK.DE",  display_name: "Deutsche Bank AG",            asset_class: euro_equity, proxy_asset_id: euro_equities }
+  # UK — proxied to euro_equities (closest European equity proxy)
+  - { ticker: "SHEL.L",  display_name: "Shell plc",                   asset_class: euro_equity, proxy_asset_id: euro_equities }
+  - { ticker: "AZN.L",   display_name: "AstraZeneca plc",             asset_class: euro_equity, proxy_asset_id: euro_equities }
+  - { ticker: "HSBA.L",  display_name: "HSBC Holdings plc",           asset_class: euro_equity, proxy_asset_id: euro_equities }
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Crypto (~10)
+  # ─────────────────────────────────────────────────────────────────────────────
+  - { ticker: "ETH-USD",  display_name: "Ethereum",                    asset_class: crypto, proxy_asset_id: bitcoin }
+  - { ticker: "SOL-USD",  display_name: "Solana",                      asset_class: crypto, proxy_asset_id: bitcoin }
+  - { ticker: "ADA-USD",  display_name: "Cardano",                     asset_class: crypto, proxy_asset_id: bitcoin }
+  - { ticker: "DOT-USD",  display_name: "Polkadot",                    asset_class: crypto, proxy_asset_id: bitcoin }
+  - { ticker: "AVAX-USD", display_name: "Avalanche",                   asset_class: crypto, proxy_asset_id: bitcoin }
+  - { ticker: "LINK-USD", display_name: "Chainlink",                   asset_class: crypto, proxy_asset_id: bitcoin }
+  - { ticker: "DOGE-USD", display_name: "Dogecoin",                    asset_class: crypto, proxy_asset_id: bitcoin }
+  - { ticker: "XRP-USD",  display_name: "Ripple XRP",                  asset_class: crypto, proxy_asset_id: bitcoin }
+  - { ticker: "MATIC-USD", display_name: "Polygon",                   asset_class: crypto, proxy_asset_id: bitcoin }
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Bond ETFs — Long duration (~10) → long_us_treasuries
+  # ─────────────────────────────────────────────────────────────────────────────
+  - { ticker: "IEF",  display_name: "iShares 7-10 Year Treasury ETF",   asset_class: bond_long, proxy_asset_id: long_us_treasuries }
+  - { ticker: "GOVT", display_name: "iShares US Treasury Bond ETF",     asset_class: bond_long, proxy_asset_id: long_us_treasuries }
+  - { ticker: "BND",  display_name: "Vanguard Total Bond Market ETF",   asset_class: bond_long, proxy_asset_id: long_us_treasuries }
+  - { ticker: "AGG",  display_name: "iShares Core US Aggregate Bond",   asset_class: bond_long, proxy_asset_id: long_us_treasuries }
+  - { ticker: "VGLT", display_name: "Vanguard Long-Term Treasury ETF",  asset_class: bond_long, proxy_asset_id: long_us_treasuries }
+  - { ticker: "EDV",  display_name: "Vanguard Extended Duration Treasury", asset_class: bond_long, proxy_asset_id: long_us_treasuries }
+  - { ticker: "ZROZ", display_name: "PIMCO 25+ Year Zero Coupon Treasury", asset_class: bond_long, proxy_asset_id: long_us_treasuries }
+  - { ticker: "TLH",  display_name: "iShares 10-20 Year Treasury ETF",  asset_class: bond_long, proxy_asset_id: long_us_treasuries }
+  - { ticker: "SPTL", display_name: "SPDR Portfolio Long Term Treasury", asset_class: bond_long, proxy_asset_id: long_us_treasuries }
+  - { ticker: "LQD",  display_name: "iShares Investment Grade Corporate Bond", asset_class: bond_long, proxy_asset_id: long_us_treasuries }
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Bond ETFs — Short duration (~10) → short_us_treasuries
+  # ─────────────────────────────────────────────────────────────────────────────
+  - { ticker: "SHV",  display_name: "iShares Short Treasury Bond ETF",  asset_class: bond_short, proxy_asset_id: short_us_treasuries }
+  - { ticker: "BIL",  display_name: "SPDR Bloomberg 1-3 Month T-Bill", asset_class: bond_short, proxy_asset_id: short_us_treasuries }
+  - { ticker: "SGOV", display_name: "iShares 0-3 Month Treasury Bond", asset_class: bond_short, proxy_asset_id: short_us_treasuries }
+  - { ticker: "VGSH", display_name: "Vanguard Short-Term Treasury ETF", asset_class: bond_short, proxy_asset_id: short_us_treasuries }
+  - { ticker: "SCHO", display_name: "Schwab Short-Term US Treasury ETF", asset_class: bond_short, proxy_asset_id: short_us_treasuries }
+  - { ticker: "IGSB", display_name: "iShares 1-5 Year IG Corporate Bond", asset_class: bond_short, proxy_asset_id: short_us_treasuries }
+  - { ticker: "FLOT", display_name: "iShares Floating Rate Bond ETF",  asset_class: bond_short, proxy_asset_id: short_us_treasuries }
+  - { ticker: "NEAR", display_name: "iShares Short Maturity Bond ETF", asset_class: bond_short, proxy_asset_id: short_us_treasuries }
+  - { ticker: "MINT", display_name: "PIMCO Enhanced Short Maturity ETF", asset_class: bond_short, proxy_asset_id: short_us_treasuries }
+  - { ticker: "JPST", display_name: "JPMorgan Ultra-Short Income ETF", asset_class: bond_short, proxy_asset_id: short_us_treasuries }
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Commodities (~15) → gold
+  # ─────────────────────────────────────────────────────────────────────────────
+  - { ticker: "IAU",  display_name: "iShares Gold Trust",              asset_class: commodity, proxy_asset_id: gold }
+  - { ticker: "GLDM", display_name: "SPDR Gold MiniShares Trust",     asset_class: commodity, proxy_asset_id: gold }
+  - { ticker: "SLV",  display_name: "iShares Silver Trust",            asset_class: commodity, proxy_asset_id: gold }
+  - { ticker: "USO",  display_name: "United States Oil Fund",          asset_class: commodity, proxy_asset_id: gold }
+  - { ticker: "UNG",  display_name: "United States Natural Gas Fund",  asset_class: commodity, proxy_asset_id: gold }
+  - { ticker: "DBA",  display_name: "Invesco DB Agriculture Fund",    asset_class: commodity, proxy_asset_id: gold }
+  - { ticker: "DBC",  display_name: "Invesco DB Commodity Index",     asset_class: commodity, proxy_asset_id: gold }
+  - { ticker: "PDBC", display_name: "Invesco Optimum Yield Diversified Commodity", asset_class: commodity, proxy_asset_id: gold }
+  - { ticker: "PPLT", display_name: "abrdn Physical Platinum Shares", asset_class: commodity, proxy_asset_id: gold }
+  - { ticker: "CPER", display_name: "United States Copper Index Fund", asset_class: commodity, proxy_asset_id: gold }
+  - { ticker: "WEAT", display_name: "Teucrium Wheat Fund",            asset_class: commodity, proxy_asset_id: gold }
+  - { ticker: "CORN", display_name: "Teucrium Corn Fund",             asset_class: commodity, proxy_asset_id: gold }
+  - { ticker: "SGOL", display_name: "abrdn Physical Gold Shares",     asset_class: commodity, proxy_asset_id: gold }
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # EM / International ETFs (~20) → closest equity proxy
+  # ─────────────────────────────────────────────────────────────────────────────
+  - { ticker: "EEM",  display_name: "iShares MSCI Emerging Markets ETF", asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "VWO",  display_name: "Vanguard FTSE Emerging Markets ETF", asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "EWJ",  display_name: "iShares MSCI Japan ETF",         asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "FXI",  display_name: "iShares China Large-Cap ETF",    asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "INDA", display_name: "iShares MSCI India ETF",         asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "EWZ",  display_name: "iShares MSCI Brazil ETF",        asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "EWG",  display_name: "iShares MSCI Germany ETF",       asset_class: euro_equity, proxy_asset_id: euro_equities }
+  - { ticker: "EWU",  display_name: "iShares MSCI United Kingdom ETF", asset_class: euro_equity, proxy_asset_id: euro_equities }
+  - { ticker: "EWQ",  display_name: "iShares MSCI France ETF",        asset_class: euro_equity, proxy_asset_id: euro_equities }
+  - { ticker: "EWP",  display_name: "iShares MSCI Spain ETF",         asset_class: euro_equity, proxy_asset_id: euro_equities }
+  - { ticker: "EWI",  display_name: "iShares MSCI Italy ETF",         asset_class: euro_equity, proxy_asset_id: euro_equities }
+  - { ticker: "KWEB", display_name: "KraneShares CSI China Internet ETF", asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "MCHI", display_name: "iShares MSCI China ETF",         asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "EFA",  display_name: "iShares MSCI EAFE ETF",          asset_class: euro_equity, proxy_asset_id: euro_equities }
+  - { ticker: "VEA",  display_name: "Vanguard FTSE Developed Markets ETF", asset_class: euro_equity, proxy_asset_id: euro_equities }
+  - { ticker: "IEMG", display_name: "iShares Core MSCI EM ETF",       asset_class: us_equity, proxy_asset_id: us_equities }
+  # EM Bond ETFs — duration risk dominates, proxied to long_us_treasuries
+  - { ticker: "EMB",  display_name: "iShares JP Morgan USD EM Bond ETF", asset_class: bond_long, proxy_asset_id: long_us_treasuries }
+  - { ticker: "EMLC", display_name: "VanEck JP Morgan EM Local Currency Bond", asset_class: bond_long, proxy_asset_id: long_us_treasuries }
+  # REIT ETFs — proxied to us_equities (equity-like behavior)
+  - { ticker: "VNQ",  display_name: "Vanguard Real Estate ETF",       asset_class: us_equity, proxy_asset_id: us_equities }
+  - { ticker: "XLRE", display_name: "Real Estate Select Sector SPDR", asset_class: us_equity, proxy_asset_id: us_equities }
