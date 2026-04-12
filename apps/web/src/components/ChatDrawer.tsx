@@ -26,15 +26,59 @@ function saveHistory(messages: ChatMessage[]) {
   );
 }
 
-/** Simple markdown: **bold**, *italic*, `code`, and line breaks */
+/** Lightweight markdown → HTML for assistant messages */
 function renderMarkdown(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    .replace(/`(.+?)`/g, '<code>$1</code>');
+  const esc = (s: string) =>
+    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  // Inline formatting on an already-escaped string
+  const inline = (s: string) =>
+    s
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.+?)\*/g, '<em>$1</em>')
+      .replace(/`(.+?)`/g, '<code>$1</code>');
+
+  const blocks = text.split(/\n\n+/);
+  const out: string[] = [];
+
+  for (const block of blocks) {
+    const trimmed = block.trim();
+    if (!trimmed) continue;
+
+    // Fenced code block
+    if (trimmed.startsWith('```')) {
+      const lines = trimmed.split('\n');
+      const code = esc(lines.slice(1, lines[lines.length - 1] === '```' ? -1 : undefined).join('\n'));
+      out.push(`<pre><code>${code}</code></pre>`);
+      continue;
+    }
+
+    // Header (## or ###)
+    const hMatch = trimmed.match(/^(#{1,4})\s+(.+)/);
+    if (hMatch) {
+      const level = hMatch[1].length;
+      out.push(`<h${level}>${inline(esc(hMatch[2]))}</h${level}>`);
+      continue;
+    }
+
+    // Unordered list block
+    const lines = trimmed.split('\n');
+    if (lines.every((l) => /^\s*[-*]\s/.test(l))) {
+      out.push('<ul>' + lines.map((l) => `<li>${inline(esc(l.replace(/^\s*[-*]\s+/, '')))}</li>`).join('') + '</ul>');
+      continue;
+    }
+
+    // Ordered list block
+    if (lines.every((l) => /^\s*\d+[.)]\s/.test(l))) {
+      out.push('<ol>' + lines.map((l) => `<li>${inline(esc(l.replace(/^\s*\d+[.)]\s+/, '')))}</li>`).join('') + '</ol>');
+      continue;
+    }
+
+    // Regular paragraph — preserve single line breaks as <br>
+    out.push('<p>' + lines.map((l) => inline(esc(l))).join('<br>') + '</p>');
+  }
+
+  return out.join('');
 }
 
 export default function ChatDrawer() {
