@@ -198,6 +198,12 @@ class Portfolio(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
+    last_analysis_signal: Mapped[str | None] = mapped_column(
+        String(20), nullable=True, default=None
+    )
+    last_analysis_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
 
     positions: Mapped[list[PortfolioPosition]] = relationship(
         "PortfolioPosition",

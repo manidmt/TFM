@@ -63,12 +63,18 @@ export interface PositionOut {
 export interface PortfolioSummaryOut {
   portfolio_id: string;
   name: string;
+  position_count: number;
+  total_weight_pct: number;
+  last_signal: VolatilityClass | null;
+  last_analysis_at: string | null;
 }
 
 export interface PortfolioDetailOut {
   portfolio_id: string;
   name: string;
   positions: PositionOut[];
+  last_signal: VolatilityClass | null;
+  last_analysis_at: string | null;
 }
 
 export interface PositionAnalysisOut {

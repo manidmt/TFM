@@ -2,7 +2,19 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../../api/client';
 import type { PortfolioSummaryOut } from '../../api/types';
+import SignalBadge from '../../components/SignalBadge';
 import './PortfolioList.css';
+
+function timeAgo(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d ago`;
+}
 
 export default function PortfolioList() {
   const [portfolios, setPortfolios] = useState<PortfolioSummaryOut[]>([]);
@@ -53,8 +65,24 @@ export default function PortfolioList() {
         {portfolios.map((p) => (
           <li key={p.portfolio_id} className="portfolio-item">
             <Link to={`/app/portfolios/${p.portfolio_id}`} className="portfolio-item-link">
-              <span className="portfolio-name">{p.name}</span>
-              <span className="portfolio-arrow">→</span>
+              <div className="portfolio-item-info">
+                <span className="portfolio-name">{p.name}</span>
+                <span className="portfolio-meta">
+                  {p.position_count} position{p.position_count !== 1 ? 's' : ''}
+                  {p.position_count > 0 && <> · {p.total_weight_pct.toFixed(0)}%</>}
+                </span>
+                {p.last_analysis_at && (
+                  <span className="portfolio-analysed">Analysed {timeAgo(p.last_analysis_at)}</span>
+                )}
+              </div>
+              <div className="portfolio-item-right">
+                {p.last_signal ? (
+                  <SignalBadge signal={p.last_signal} size="sm" />
+                ) : (
+                  <span className="portfolio-no-analysis">No analysis</span>
+                )}
+                <span className="portfolio-arrow">→</span>
+              </div>
             </Link>
           </li>
         ))}

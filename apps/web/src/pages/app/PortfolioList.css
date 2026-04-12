@@ -26,16 +26,48 @@
   padding: var(--space-3) var(--space-4);
   text-decoration: none;
   transition: background 0.15s;
+  gap: var(--space-3);
 }
 
 .portfolio-item-link:hover {
-  background: rgba(255, 255, 255, 0.9);
+  background: var(--bg-soft);
+}
+
+.portfolio-item-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .portfolio-name {
   font-family: 'IBM Plex Sans', system-ui, sans-serif;
   font-size: 0.9375rem;
+  font-weight: 600;
   color: var(--text);
+}
+
+.portfolio-meta {
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 0.78rem;
+  color: var(--text-soft);
+}
+
+.portfolio-analysed {
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 0.72rem;
+  color: var(--text-faint);
+}
+
+.portfolio-item-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-shrink: 0;
+}
+
+.portfolio-no-analysis {
+  font-size: 0.72rem;
+  color: var(--text-faint);
 }
 
 .portfolio-arrow {

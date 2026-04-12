@@ -31,6 +31,8 @@ POST /api/private/portfolios/{portfolio_id}/analyze
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -77,6 +79,10 @@ class UpdatePortfolioRequest(BaseModel):
 class PortfolioSummaryOut(BaseModel):
     portfolio_id: str
     name: str
+    position_count: int
+    total_weight_pct: float
+    last_signal: str | None
+    last_analysis_at: str | None
 
 
 class PositionOut(BaseModel):
@@ -89,6 +95,8 @@ class PortfolioDetailOut(BaseModel):
     portfolio_id: str
     name: str
     positions: list[PositionOut]
+    last_signal: str | None
+    last_analysis_at: str | None
 
 
 class PositionAnalysisOut(BaseModel):
@@ -143,6 +151,23 @@ def _pos_in_to_input(p: PositionIn) -> PositionInput:
     )
 
 
+def _portfolio_detail_out(portfolio) -> PortfolioDetailOut:
+    return PortfolioDetailOut(
+        portfolio_id=portfolio.id,
+        name=portfolio.name,
+        positions=[
+            PositionOut(
+                label=pos.label,
+                weight_pct=pos.weight_pct,
+                proxy_asset_id=pos.proxy_asset_id,
+            )
+            for pos in portfolio.positions
+        ],
+        last_signal=portfolio.last_analysis_signal,
+        last_analysis_at=str(portfolio.last_analysis_at) if portfolio.last_analysis_at else None,
+    )
+
+
 def _handle_portfolio_errors(exc: Exception) -> None:
     if isinstance(exc, PortfolioNotFoundError):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
@@ -165,7 +190,15 @@ def list_portfolios(
     """List the current user's portfolios."""
     portfolios = list_user_portfolios(db, current_user.id)
     return [
-        PortfolioSummaryOut(portfolio_id=p.id, name=p.name) for p in portfolios
+        PortfolioSummaryOut(
+            portfolio_id=p.id,
+            name=p.name,
+            position_count=len(p.positions),
+            total_weight_pct=sum(pos.weight_pct for pos in p.positions),
+            last_signal=p.last_analysis_signal,
+            last_analysis_at=str(p.last_analysis_at) if p.last_analysis_at else None,
+        )
+        for p in portfolios
     ]
 
 
@@ -192,18 +225,7 @@ def create_portfolio_endpoint(
     except (PortfolioNotFoundError, PortfolioValidationError) as exc:
         _handle_portfolio_errors(exc)
 
-    return PortfolioDetailOut(
-        portfolio_id=portfolio.id,
-        name=portfolio.name,
-        positions=[
-            PositionOut(
-                label=pos.label,
-                weight_pct=pos.weight_pct,
-                proxy_asset_id=pos.proxy_asset_id,
-            )
-            for pos in portfolio.positions
-        ],
-    )
+    return _portfolio_detail_out(portfolio)
 
 
 @router.get("/portfolios/{portfolio_id}", response_model=PortfolioDetailOut)
@@ -218,18 +240,7 @@ def get_portfolio_endpoint(
     except PortfolioNotFoundError as exc:
         _handle_portfolio_errors(exc)
 
-    return PortfolioDetailOut(
-        portfolio_id=portfolio.id,
-        name=portfolio.name,
-        positions=[
-            PositionOut(
-                label=pos.label,
-                weight_pct=pos.weight_pct,
-                proxy_asset_id=pos.proxy_asset_id,
-            )
-            for pos in portfolio.positions
-        ],
-    )
+    return _portfolio_detail_out(portfolio)
 
 
 @router.put("/portfolios/{portfolio_id}", response_model=PortfolioDetailOut)
@@ -260,18 +271,7 @@ def update_portfolio_endpoint(
     except (PortfolioNotFoundError, PortfolioValidationError) as exc:
         _handle_portfolio_errors(exc)
 
-    return PortfolioDetailOut(
-        portfolio_id=portfolio.id,
-        name=portfolio.name,
-        positions=[
-            PositionOut(
-                label=pos.label,
-                weight_pct=pos.weight_pct,
-                proxy_asset_id=pos.proxy_asset_id,
-            )
-            for pos in portfolio.positions
-        ],
-    )
+    return _portfolio_detail_out(portfolio)
 
 
 @router.delete("/portfolios/{portfolio_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -318,6 +318,12 @@ def analyze_portfolio_endpoint(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
         )
+
+    # Persist last analysis metadata (only for real analysis, not what-if)
+    if body.positions is None:
+        portfolio.last_analysis_signal = result.portfolio_signal
+        portfolio.last_analysis_at = datetime.now(timezone.utc)
+        db.commit()
 
     return PortfolioAnalysisOut(
         portfolio_id=result.portfolio_id,

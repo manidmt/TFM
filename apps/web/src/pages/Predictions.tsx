@@ -35,7 +35,7 @@ export default function Predictions() {
               )
               .then((rows) => ({
                 asset_id: asset.asset_id,
-                regimes: rows.map((r) => r.regime as VolatilityClass),
+                regimes: rows.map((r) => r.regime as VolatilityClass).slice(-30),
               }))
               .catch(() => ({ asset_id: asset.asset_id, regimes: [] as VolatilityClass[] })),
           ),
