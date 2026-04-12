@@ -1,0 +1,430 @@
+/* Hero */
+.meth-hero {
+  padding: var(--space-8) 0 var(--space-6);
+  text-align: center;
+}
+
+.meth-title {
+  font-family: 'Newsreader', Georgia, serif;
+  font-size: clamp(2.2rem, 6vw, 3.5rem);
+  font-weight: 400;
+  color: var(--text);
+  letter-spacing: -0.02em;
+  margin: 0 0 var(--space-3);
+}
+
+.meth-subtitle {
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 1.0625rem;
+  color: var(--text-soft);
+  max-width: 600px;
+  margin: 0 auto var(--space-4);
+  line-height: 1.7;
+}
+
+.meth-subtitle em {
+  font-style: normal;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.meth-back {
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 0.85rem;
+  color: var(--text-faint);
+  text-decoration: none;
+}
+
+.meth-back:hover {
+  color: var(--text);
+}
+
+/* Sections */
+.meth-section {
+  border-top: 1px solid var(--line);
+  padding-top: var(--space-6);
+  padding-bottom: var(--space-6);
+}
+
+.meth-section-title {
+  font-family: 'Newsreader', Georgia, serif;
+  font-size: 1.75rem;
+  font-weight: 400;
+  color: var(--text);
+  letter-spacing: -0.01em;
+  margin: 0 0 var(--space-4);
+}
+
+.meth-body {
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 0.9375rem;
+  color: var(--text-soft);
+  line-height: 1.7;
+  max-width: 680px;
+  margin-bottom: var(--space-4);
+}
+
+.meth-body-muted {
+  font-size: 0.85rem;
+  color: var(--text-faint);
+  margin-top: var(--space-3);
+}
+
+/* 2. Asset Universe */
+.asset-universe-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-3);
+}
+
+.asset-universe-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.auc-ticker {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.75rem;
+  color: var(--text-faint);
+}
+
+.auc-name {
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.auc-class {
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent-soft);
+}
+
+.auc-why {
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 0.8rem;
+  color: var(--text-soft);
+  line-height: 1.5;
+  margin-top: 4px;
+}
+
+/* 3. Pipeline */
+.pipeline-flow {
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+  overflow-x: auto;
+  padding-bottom: var(--space-2);
+}
+
+.pipeline-step-wrapper {
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+  flex-shrink: 0;
+}
+
+.pipeline-arrow {
+  display: flex;
+  align-items: center;
+  padding: 12px 8px 0;
+  font-size: 1.1rem;
+  color: var(--text-faint);
+  flex-shrink: 0;
+}
+
+.pipeline-step {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 140px;
+  max-width: 170px;
+}
+
+.pipeline-step-label {
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.pipeline-step-desc {
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 0.72rem;
+  color: var(--text-faint);
+  line-height: 1.45;
+}
+
+/* 4. Models */
+.model-subsections {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.model-block {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+}
+
+.model-block-title {
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0 0 8px;
+}
+
+.model-block p {
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 0.875rem;
+  color: var(--text-soft);
+  line-height: 1.7;
+  margin: 0;
+}
+
+/* 5. Data Sources */
+.data-sources-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-3);
+}
+
+.data-source-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ds-name {
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.ds-source {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.72rem;
+  color: var(--accent-soft);
+}
+
+.ds-desc {
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 0.8rem;
+  color: var(--text-soft);
+  line-height: 1.55;
+  margin-top: 4px;
+}
+
+/* 6. Regime Classification */
+.regime-bars {
+  max-width: 500px;
+  margin-bottom: var(--space-3);
+}
+
+.regime-bar {
+  display: flex;
+  height: 24px;
+  border-radius: 6px;
+  overflow: hidden;
+  gap: 2px;
+}
+
+.regime-bar-fill {
+  height: 100%;
+}
+
+.regime-low { background: var(--low); }
+.regime-medium { background: var(--medium); }
+.regime-high { background: var(--high); }
+
+.regime-labels {
+  display: flex;
+  margin-top: 6px;
+}
+
+.regime-label {
+  flex: 1;
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 0.75rem;
+  color: var(--text-faint);
+}
+
+.regime-label.low { color: var(--low); }
+.regime-label.medium { color: var(--medium); text-align: center; }
+.regime-label.high { color: var(--high); text-align: right; }
+
+/* 7. Evaluation */
+.eval-list {
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 0.9rem;
+  color: var(--text-soft);
+  line-height: 1.7;
+  max-width: 680px;
+  padding-left: 20px;
+}
+
+.eval-list li {
+  margin-bottom: var(--space-2);
+}
+
+.eval-list strong {
+  color: var(--text);
+}
+
+/* 8. Infrastructure */
+.infra-diagram {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.infra-node {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  flex: 1;
+}
+
+.infra-node-title {
+  display: block;
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+
+.infra-node-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.75rem;
+  color: var(--text-faint);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.infra-arrow {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  min-width: 100px;
+}
+
+.infra-arrow-line {
+  display: block;
+  width: 100%;
+  height: 1px;
+  background: var(--line-strong);
+  position: relative;
+}
+
+.infra-arrow-line::after {
+  content: '→';
+  position: absolute;
+  right: -4px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-faint);
+  font-size: 1rem;
+}
+
+.infra-arrow-label {
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 0.7rem;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+/* 9. Disclaimer */
+.meth-disclaimer-box {
+  background: var(--bg-soft);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+}
+
+.meth-disclaimer-box .meth-section-title {
+  font-size: 1.25rem;
+  margin-bottom: var(--space-3);
+}
+
+.disclaimer-list {
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 0.85rem;
+  color: var(--text-faint);
+  line-height: 1.7;
+  padding-left: 18px;
+  margin: 0;
+}
+
+.disclaimer-list li {
+  margin-bottom: 4px;
+}
+
+/* Responsive */
+@media (max-width: 640px) {
+  .asset-universe-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .data-sources-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .pipeline-flow {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .pipeline-step-wrapper {
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .pipeline-arrow {
+    transform: rotate(90deg);
+    padding: 4px 0;
+  }
+
+  .pipeline-step {
+    min-width: unset;
+    max-width: unset;
+    width: 100%;
+  }
+
+  .infra-diagram {
+    flex-direction: column;
+  }
+
+  .infra-arrow {
+    transform: rotate(90deg);
+    min-width: unset;
+  }
+}

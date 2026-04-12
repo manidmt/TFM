@@ -136,3 +136,17 @@
   color: var(--text);
   font-weight: 500;
 }
+
+.about-methodology-link {
+  display: inline-block;
+  margin-top: var(--space-3);
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 0.9375rem;
+  color: var(--accent-soft);
+  text-decoration: none;
+  transition: color 0.15s;
+}
+
+.about-methodology-link:hover {
+  color: var(--accent);
+}

@@ -13,6 +13,7 @@ import PortfolioDetail from './pages/app/PortfolioDetail';
 import OpsOverview from './pages/ops/OpsOverview';
 import OpsAssets from './pages/ops/OpsAssets';
 import OpsPromotions from './pages/ops/OpsPromotions';
+import Methodology from './pages/Methodology';
 
 export default function App() {
   return (
@@ -24,6 +25,7 @@ export default function App() {
             <Route path="/" element={<Landing />} />
             <Route path="/predictions" element={<Predictions />} />
             <Route path="/predictions/:assetId" element={<AssetHistory />} />
+            <Route path="/methodology" element={<Methodology />} />
             <Route path="/login" element={<Login />} />
 
             {/* Private — authenticated users */}

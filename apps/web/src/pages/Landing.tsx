@@ -53,6 +53,9 @@ export default function Landing() {
             Euro Stocks, Bitcoin, Gold, and US Treasuries), and allows registered users
             to analyse their own portfolios against those signals.
           </p>
+          <Link to="/methodology" className="about-methodology-link">
+            Learn about the methodology →
+          </Link>
         </div>
       </section>
     </div>
