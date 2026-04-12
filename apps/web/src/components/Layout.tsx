@@ -1,6 +1,7 @@
 import { Link, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import './Layout.css';
+import ChatDrawer from './ChatDrawer';
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const { user, logout } = useAuth();
@@ -50,6 +51,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           <span className="footer-desc">Master's Thesis in AI &amp; Analytics</span>
         </div>
       </footer>
+      <ChatDrawer />
     </div>
   );
 }
