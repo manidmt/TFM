@@ -34,7 +34,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from quant_risk.prod.api.deps import get_auth_db, get_current_user, get_serving_db
@@ -52,6 +52,13 @@ from quant_risk.prod.auth.portfolios import (
 )
 from quant_risk.prod.portfolio_analysis import analyze_portfolio_orm
 from quant_risk.prod.serving.duckdb import ServingDB
+
+import duckdb
+from fastapi.responses import StreamingResponse
+
+from quant_risk.prod.api.deps import get_config, get_research_db
+from quant_risk.prod.api.config import AppConfig
+from quant_risk.prod.chat.service import chat_stream
 
 router = APIRouter(prefix="/api/private", tags=["private"])
 
@@ -137,6 +144,15 @@ class PortfolioAnalysisOut(BaseModel):
 
 class AnalyzeRequest(BaseModel):
     positions: list[PositionIn] | None = None
+
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+
+class ChatRequest(BaseModel):
+    messages: list[ChatMessage] = Field(..., max_length=50)
 
 
 # ---------------------------------------------------------------------------
@@ -361,4 +377,44 @@ def analyze_portfolio_endpoint(
         portfolio_p_high=result.portfolio_p_high,
         portfolio_signal=result.portfolio_signal,
         missing_predictions=result.missing_predictions,
+    )
+
+
+@router.post("/chat")
+def chat_endpoint(
+    body: ChatRequest,
+    current_user: User = Depends(get_current_user),
+    config: AppConfig = Depends(get_config),
+    db: Session = Depends(get_auth_db),
+    serving_db: ServingDB = Depends(get_serving_db),
+    research_db: duckdb.DuckDBPyConnection = Depends(get_research_db),
+):
+    """Stream a chat response using OpenAI with tool use."""
+    if not config.openai_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Chat is not configured.",
+        )
+
+    # Validate message content length
+    for msg in body.messages:
+        if len(msg.content) > 2000:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Message content must be under 2000 characters.",
+            )
+
+    messages = [{"role": m.role, "content": m.content} for m in body.messages]
+
+    return StreamingResponse(
+        chat_stream(
+            messages=messages,
+            user=current_user,
+            db=db,
+            serving_db=serving_db,
+            research_db=research_db,
+            api_key=config.openai_api_key,
+            model=config.openai_model,
+        ),
+        media_type="text/event-stream",
     )
