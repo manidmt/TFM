@@ -77,3 +77,5 @@ class AppConfig:
         self.internal_token: str | None = (
             os.environ.get("QUANT_RISK_INTERNAL_TOKEN") or None
         )
+        self.openai_api_key: str | None = os.environ.get("OPENAI_API_KEY") or None
+        self.openai_model: str = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")

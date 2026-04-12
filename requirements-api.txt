@@ -12,3 +12,4 @@ pyyaml>=6.0,<7.0
 pandas>=2.2.0,<3.0.0
 numpy>=1.26.0,<3.0.0
 python-multipart>=0.0.9
+openai>=1.0.0,<2.0.0
