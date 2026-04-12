@@ -139,3 +139,21 @@ export interface PromotionEventOut {
   previous_version: string | null;
   validation_errors: string | null;
 }
+
+// Chat
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface ChatToolEvent {
+  name: string;
+  status: 'start' | 'end';
+}
+
+export interface ChatSSEEvent {
+  type: 'token' | 'tool' | 'done';
+  content?: string;
+  name?: string;
+  status?: string;
+}
