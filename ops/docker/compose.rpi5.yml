@@ -69,6 +69,9 @@ services:
       # predictions into serving.duckdb without running the heavy model stack
       # on the RPi5. Leave empty to disable the endpoint (returns 503).
       QUANT_RISK_INTERNAL_TOKEN: ${INTERNAL_TOKEN:-}
+      # Chat analyst — OpenAI-powered chatbot (design spec §Environment variables)
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
     volumes:
       # serving.duckdb mounted read-write so the internal push endpoint can
       # upsert predictions. financial_data.duckdb is still only read by the
