@@ -5,7 +5,7 @@ import type { UserOut } from '../api/types';
 interface AuthState {
   user: UserOut | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<UserOut>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
 }
@@ -29,9 +29,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     refresh().finally(() => setLoading(false));
   }, [refresh]);
 
-  const login = useCallback(async (email: string, password: string) => {
+  const login = useCallback(async (email: string, password: string): Promise<UserOut> => {
     const u = await api.post<UserOut>('/api/auth/login', { email, password });
     setUser(u);
+    return u;
   }, []);
 
   const logout = useCallback(async () => {

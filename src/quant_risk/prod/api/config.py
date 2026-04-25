@@ -79,3 +79,9 @@ class AppConfig:
         )
         self.openai_api_key: str | None = os.environ.get("OPENAI_API_KEY") or None
         self.openai_model: str = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+        # Optional email notification for admin on new user signup
+        self.notify_email: str | None = os.environ.get("QUANT_RISK_NOTIFY_EMAIL") or None
+        self.smtp_host: str | None = os.environ.get("QUANT_RISK_SMTP_HOST") or None
+        self.smtp_port: int = int(os.environ.get("QUANT_RISK_SMTP_PORT", "587"))
+        self.smtp_user: str | None = os.environ.get("QUANT_RISK_SMTP_USER") or None
+        self.smtp_password: str | None = os.environ.get("QUANT_RISK_SMTP_PASSWORD") or None

@@ -72,6 +72,11 @@ services:
       # Chat analyst — OpenAI-powered chatbot (design spec §Environment variables)
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      QUANT_RISK_NOTIFY_EMAIL: ${QUANT_RISK_NOTIFY_EMAIL:-}
+      QUANT_RISK_SMTP_HOST: ${QUANT_RISK_SMTP_HOST:-}
+      QUANT_RISK_SMTP_PORT: ${QUANT_RISK_SMTP_PORT:-587}
+      QUANT_RISK_SMTP_USER: ${QUANT_RISK_SMTP_USER:-}
+      QUANT_RISK_SMTP_PASSWORD: ${QUANT_RISK_SMTP_PASSWORD:-}
     volumes:
       # serving.duckdb mounted read-write so the internal push endpoint can
       # upsert predictions. financial_data.duckdb is still only read by the

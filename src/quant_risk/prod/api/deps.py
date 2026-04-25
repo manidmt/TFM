@@ -81,8 +81,23 @@ def get_auth_db() -> Generator[Session, None, None]:
 def get_serving_db(
     config: AppConfig = Depends(get_config),
 ) -> Generator[ServingDB, None, None]:
-    """Yield an open ServingDB connection."""
-    sdb = ServingDB(config.serving_db_path)
+    """Yield an open read-only ServingDB connection.
+
+    Most API routes are query-only and should not compete for a write lock
+    against the worker/internal push path.
+    """
+    sdb = ServingDB(config.serving_db_path, read_only=True)
+    try:
+        yield sdb
+    finally:
+        sdb.close()
+
+
+def get_serving_db_rw(
+    config: AppConfig = Depends(get_config),
+) -> Generator[ServingDB, None, None]:
+    """Yield an open read-write ServingDB connection for write routes only."""
+    sdb = ServingDB(config.serving_db_path, read_only=False)
     try:
         yield sdb
     finally:

@@ -1,0 +1,28 @@
+.signup-pending {
+  color: var(--text-soft);
+  margin-bottom: var(--space-5);
+  line-height: 1.5;
+}
+
+.signup-back-btn {
+  width: 100%;
+  justify-content: center;
+  text-decoration: none;
+  display: flex;
+}
+
+.signup-switch {
+  margin-top: var(--space-4);
+  font-size: 0.875rem;
+  color: var(--text-faint);
+  text-align: center;
+}
+
+.signup-link {
+  color: var(--accent-soft);
+  text-decoration: none;
+}
+
+.signup-link:hover {
+  text-decoration: underline;
+}

@@ -113,6 +113,16 @@ export interface PortfolioAnalysisOut {
   missing_predictions: string[];
 }
 
+// Admin user management
+export interface UserAdminOut {
+  user_id: string;
+  email: string;
+  role: string;
+  is_active: boolean;
+  is_approved: boolean;
+  created_at: string;
+}
+
 // Admin ops types
 export interface OpsSummaryOut {
   asset_count: number;

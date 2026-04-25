@@ -1,5 +1,5 @@
 import { FormEvent, useState } from 'react';
-import { useNavigate, useLocation, Navigate } from 'react-router-dom';
+import { useNavigate, useLocation, Navigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { ApiError } from '../api/client';
 import ChartCanvas from '../components/ChartCanvas';
@@ -23,10 +23,16 @@ export default function Login() {
     setError(null);
     setLoading(true);
     try {
-      await login(email, password);
-      navigate(from, { replace: true });
+      const u = await login(email, password);
+      if (u.must_change_password) {
+        navigate('/change-password', { replace: true });
+      } else {
+        navigate(from, { replace: true });
+      }
     } catch (err) {
-      if (err instanceof ApiError && err.status === 401) {
+      if (err instanceof ApiError && err.status === 403) {
+        setError('Your account is pending admin approval.');
+      } else if (err instanceof ApiError && err.status === 401) {
         setError('Invalid email or password.');
       } else {
         setError('Something went wrong. Please try again.');
@@ -73,6 +79,11 @@ export default function Login() {
             {loading ? 'Signing in…' : 'Sign in'}
           </button>
         </form>
+
+        <p className="signup-switch">
+          Don't have an account?{' '}
+          <Link to="/signup" className="signup-link">Request access</Link>
+        </p>
       </div>
     </div>
   );

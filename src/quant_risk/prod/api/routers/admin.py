@@ -27,11 +27,14 @@ Design notes (rpi5.md §12.3)
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
-from quant_risk.prod.api.deps import get_serving_db, require_admin
+from quant_risk.prod.api.deps import get_auth_db, get_serving_db, require_admin
 from quant_risk.prod.auth.models import User
+from quant_risk.prod.auth.users import approve_user, get_user_by_id, reject_user, set_active
 from quant_risk.prod.serving.duckdb import ServingDB
 from quant_risk.prod.serving.ops import (
     get_active_bundles,
@@ -47,6 +50,15 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 # ---------------------------------------------------------------------------
 # Response schemas
 # ---------------------------------------------------------------------------
+
+class UserAdminOut(BaseModel):
+    user_id: str
+    email: str
+    role: str
+    is_active: bool
+    is_approved: bool
+    created_at: str
+
 
 class OpsSummaryOut(BaseModel):
     asset_count: int
@@ -105,6 +117,103 @@ def ops_assets(
         )
         for r in rows
     ]
+
+
+# ---------------------------------------------------------------------------
+# User management routes
+# ---------------------------------------------------------------------------
+
+def _user_admin_out(u: User) -> UserAdminOut:
+    return UserAdminOut(
+        user_id=u.id,
+        email=u.email,
+        role=u.role,
+        is_active=u.is_active,
+        is_approved=u.is_approved,
+        created_at=u.created_at.isoformat(),
+    )
+
+
+@router.get("/users", response_model=list[UserAdminOut])
+def list_users(
+    db: Session = Depends(get_auth_db),
+    _admin: User = Depends(require_admin),
+):
+    """List all user accounts."""
+    users = db.execute(select(User).order_by(User.created_at.desc())).scalars().all()
+    return [_user_admin_out(u) for u in users]
+
+
+@router.get("/users/pending", response_model=list[UserAdminOut])
+def list_pending_users(
+    db: Session = Depends(get_auth_db),
+    _admin: User = Depends(require_admin),
+):
+    """List users awaiting approval."""
+    users = db.execute(
+        select(User).where(User.is_approved == False).order_by(User.created_at.desc())  # noqa: E712
+    ).scalars().all()
+    return [_user_admin_out(u) for u in users]
+
+
+@router.post("/users/{user_id}/approve", response_model=UserAdminOut)
+def approve_user_endpoint(
+    user_id: str,
+    db: Session = Depends(get_auth_db),
+    _admin: User = Depends(require_admin),
+):
+    """Approve a pending user account."""
+    user = get_user_by_id(db, user_id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    approve_user(db, user)
+    db.commit()
+    return _user_admin_out(user)
+
+
+@router.post("/users/{user_id}/reject", response_model=UserAdminOut)
+def reject_user_endpoint(
+    user_id: str,
+    db: Session = Depends(get_auth_db),
+    _admin: User = Depends(require_admin),
+):
+    """Reject a pending user account."""
+    user = get_user_by_id(db, user_id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    reject_user(db, user)
+    db.commit()
+    return _user_admin_out(user)
+
+
+@router.post("/users/{user_id}/deactivate", response_model=UserAdminOut)
+def deactivate_user_endpoint(
+    user_id: str,
+    db: Session = Depends(get_auth_db),
+    _admin: User = Depends(require_admin),
+):
+    """Deactivate an approved user account."""
+    user = get_user_by_id(db, user_id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    set_active(db, user, False)
+    db.commit()
+    return _user_admin_out(user)
+
+
+@router.post("/users/{user_id}/activate", response_model=UserAdminOut)
+def activate_user_endpoint(
+    user_id: str,
+    db: Session = Depends(get_auth_db),
+    _admin: User = Depends(require_admin),
+):
+    """Re-activate a deactivated user account."""
+    user = get_user_by_id(db, user_id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    set_active(db, user, True)
+    db.commit()
+    return _user_admin_out(user)
 
 
 @router.get("/ops/promotions", response_model=list[PromotionEventOut])

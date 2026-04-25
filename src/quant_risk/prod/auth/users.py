@@ -48,6 +48,10 @@ class InvalidRoleError(ValueError):
     """Raised when an invalid role string is supplied."""
 
 
+class UserPendingApprovalError(Exception):
+    """Raised by authenticate() when credentials are valid but account awaits admin approval."""
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -86,6 +90,7 @@ def create_user(
     plain_password: str,
     role: str = "user",
     must_change_password: bool = True,
+    is_approved: bool = True,
 ) -> User:
     """Create a new user account.
 
@@ -130,6 +135,7 @@ def create_user(
         role=role,
         must_change_password=must_change_password,
         is_active=True,
+        is_approved=is_approved,
         created_at=now,
         updated_at=now,
     )
@@ -149,10 +155,9 @@ def create_user(
 def authenticate(db: Session, email: str, plain_password: str) -> User | None:
     """Return the User if credentials are valid, or None.
 
-    Returns None (never raises) for:
-    - unknown e-mail
-    - wrong password
-    - inactive account
+    Returns None for unknown e-mail, wrong password, or inactive account.
+    Raises UserPendingApprovalError when credentials are correct but the
+    account has not been approved by an admin yet.
 
     Callers should check ``user.must_change_password`` after a successful
     authentication and redirect accordingly.
@@ -165,6 +170,8 @@ def authenticate(db: Session, email: str, plain_password: str) -> User | None:
     if not verify_password(plain_password, user.password_hash):
         logger.debug("Failed login attempt for email=%s", _normalize_email(email))
         return None
+    if not user.is_approved:
+        raise UserPendingApprovalError(user.email)
     return user
 
 
@@ -199,6 +206,26 @@ def change_password(
     user.updated_at = _now()
     db.flush()
     logger.info("Password changed for user_id=%s", user.id)
+    return user
+
+
+def approve_user(db: Session, user: User) -> User:
+    """Grant access to a pending user (set is_approved=True, is_active=True)."""
+    user.is_approved = True
+    user.is_active = True
+    user.updated_at = _now()
+    db.flush()
+    logger.info("User approved email=%s user_id=%s", user.email, user.id)
+    return user
+
+
+def reject_user(db: Session, user: User) -> User:
+    """Reject a pending signup (is_approved stays False, is_active=False)."""
+    user.is_approved = False
+    user.is_active = False
+    user.updated_at = _now()
+    db.flush()
+    logger.info("User rejected email=%s user_id=%s", user.email, user.id)
     return user
 
 

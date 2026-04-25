@@ -55,6 +55,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from quant_risk.prod.api.deps import (
     get_serving_db,
+    get_serving_db_rw,
     require_internal_token,
 )
 from quant_risk.prod.schemas import PredictedClass, RunStatus
@@ -133,7 +134,7 @@ class PredictionPushOut(BaseModel):
 )
 def push_prediction(
     payload: PredictionPushIn,
-    serving_db: ServingDB = Depends(get_serving_db),
+    serving_db: ServingDB = Depends(get_serving_db_rw),
     _token: None = Depends(require_internal_token),
 ) -> PredictionPushOut:
     """Persist a prediction produced off-box.

@@ -24,6 +24,7 @@ export default function OpsOverview() {
         <div className="ops-nav-links">
           <Link to="/ops/assets" className="ops-link">Asset status →</Link>
           <Link to="/ops/promotions" className="ops-link">Promotions →</Link>
+          <Link to="/ops/users" className="ops-link">Users →</Link>
         </div>
       </header>
 

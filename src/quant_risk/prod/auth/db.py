@@ -86,6 +86,15 @@ class AuthDB:
     def create_tables(self) -> None:
         """Create all auth tables (idempotent — uses CREATE TABLE IF NOT EXISTS)."""
         Base.metadata.create_all(self._engine)
+        # Safe migration: add is_approved column if it was created before this field existed.
+        # Postgres supports ADD COLUMN IF NOT EXISTS; SQLite in-memory starts fresh so skip.
+        if not self._url.startswith("sqlite"):
+            with self._engine.connect() as conn:
+                conn.execute(text(
+                    "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
+                    "is_approved BOOLEAN NOT NULL DEFAULT TRUE"
+                ))
+                conn.commit()
         logger.info("AuthDB tables created/verified.")
 
     def drop_tables(self) -> None:

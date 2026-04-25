@@ -44,13 +44,20 @@ from sqlalchemy.orm import Session
 from quant_risk.prod.api.config import AppConfig
 from quant_risk.prod.api.deps import get_auth_db, get_config, get_current_user
 from quant_risk.prod.auth.models import User
+from quant_risk.prod.auth.notify import notify_admin_signup
 from quant_risk.prod.auth.sessions import (
     SESSION_DURATION,
     create_session,
     invalidate_all_user_sessions,
     invalidate_session,
 )
-from quant_risk.prod.auth.users import authenticate, change_password
+from quant_risk.prod.auth.users import (
+    UserAlreadyExistsError,
+    UserPendingApprovalError,
+    authenticate,
+    change_password,
+    create_user,
+)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -62,6 +69,15 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 class LoginRequest(BaseModel):
     email: str
     password: str
+
+
+class SignupRequest(BaseModel):
+    email: str
+    password: str
+
+
+class SignupResponse(BaseModel):
+    message: str
 
 
 class ChangePasswordRequest(BaseModel):
@@ -115,6 +131,41 @@ def _user_out(user: User) -> UserOut:
 # Routes
 # ---------------------------------------------------------------------------
 
+@router.post("/signup", response_model=SignupResponse, status_code=status.HTTP_201_CREATED)
+def signup(
+    body: SignupRequest,
+    config: AppConfig = Depends(get_config),
+    db: Session = Depends(get_auth_db),
+):
+    """Public registration endpoint.
+
+    Creates an account with is_approved=False. The admin must approve it
+    before the user can log in. Fires a notification email if SMTP is configured.
+    """
+    try:
+        create_user(
+            db,
+            email=body.email,
+            plain_password=body.password,
+            role="user",
+            must_change_password=False,
+            is_approved=False,
+        )
+        db.commit()
+    except UserAlreadyExistsError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An account with this email already exists.",
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        )
+    notify_admin_signup(body.email, config)
+    return SignupResponse(message="Account created. Awaiting admin approval.")
+
+
 @router.post("/login", response_model=UserOut)
 def login(
     body: LoginRequest,
@@ -124,10 +175,18 @@ def login(
 ):
     """Authenticate and set a session cookie.
 
+    Returns HTTP 403 with detail "pending_approval" if the account exists but
+    has not been approved by an admin yet.
     The caller should check ``must_change_password`` in the response and
     redirect to the password-change page if True.
     """
-    user = authenticate(db, body.email, body.password)
+    try:
+        user = authenticate(db, body.email, body.password)
+    except UserPendingApprovalError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="pending_approval",
+        )
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

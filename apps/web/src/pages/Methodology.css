@@ -253,9 +253,9 @@
   height: 100%;
 }
 
-.regime-low { background: var(--low); }
-.regime-medium { background: var(--medium); }
-.regime-high { background: var(--high); }
+.regime-bar-fill.regime-low { background: var(--low); }
+.regime-bar-fill.regime-medium { background: var(--medium); }
+.regime-bar-fill.regime-high { background: var(--high); }
 
 .regime-labels {
   display: flex;

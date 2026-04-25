@@ -12,8 +12,8 @@ export default defineConfig({
     },
   },
   build: {
-    // Output alongside the repo root so Nginx can serve from /srv/quant-risk/static/
-    outDir: '../../static',
+    // Output to ~/Desktop/risk/static/ which nginx mounts as the web root
+    outDir: '../../../static',
     emptyOutDir: true,
   },
 });
