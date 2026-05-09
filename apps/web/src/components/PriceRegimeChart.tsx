@@ -40,15 +40,26 @@ export default function PriceRegimeChart({ prices, realRegimes, latestPred, vol5
   }, [realRegimes]);
 
   // Assign real regime to each price point using carry-forward.
-  // Dates before the earliest regime label get regime=null (no background band).
+  // Seed `last` with the most recent regime label BEFORE the filtered window so that
+  // short ranges (1M) that fall entirely past the last available label still show bands.
   const points = useMemo((): Array<{ date: string; close: number; regime: VolatilityClass | null }> => {
+    const firstDate = filtered.length > 0 ? filtered[0].date : '';
     let last: VolatilityClass | null = null;
+    if (firstDate) {
+      let latestPriorDate = '';
+      for (const r of realRegimes) {
+        if (r.date < firstDate && r.date > latestPriorDate) {
+          latestPriorDate = r.date;
+          last = r.regime as VolatilityClass;
+        }
+      }
+    }
     return filtered.map((p) => {
       const r = regimeByDate.get(p.date);
       if (r) last = r;
       return { ...p, regime: last };
     });
-  }, [filtered, regimeByDate]);
+  }, [filtered, regimeByDate, realRegimes]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
