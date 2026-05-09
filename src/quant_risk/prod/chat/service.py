@@ -11,6 +11,7 @@ from openai import OpenAI
 from sqlalchemy.orm import Session
 
 from quant_risk.prod.auth.models import User
+from quant_risk.prod.chat.guard import blocked_reply, is_conversation_allowed
 from quant_risk.prod.chat.prompts import SYSTEM_PROMPT
 from quant_risk.prod.chat.tools import TOOL_DEFINITIONS, TOOL_REGISTRY
 from quant_risk.prod.serving.duckdb import ServingDB
@@ -37,6 +38,13 @@ def chat_stream(
         Lines in SSE format: ``data: {"type": "...", ...}\\n\\n``
     """
     client = OpenAI(api_key=api_key)
+
+    # Guard: classify the conversation before calling the main model.
+    # Uses gpt-4o-mini (max 5 output tokens) so cost and latency are negligible.
+    if not is_conversation_allowed(client, messages):
+        yield _sse({"type": "token", "content": blocked_reply()})
+        yield _sse({"type": "done"})
+        return
 
     openai_messages: list[dict[str, Any]] = [
         {"role": "system", "content": SYSTEM_PROMPT},
