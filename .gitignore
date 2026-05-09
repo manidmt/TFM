@@ -67,6 +67,11 @@ skills-lock.json
 .playwright/
 .playwright-cli/
 .superpowers/
+.claude/settings.local.json
+
+# Engram (memory config committed, local DB not)
+.engram/engram.db
+.engram/*.bak
 
 # Reports
 /reports/
