@@ -97,6 +97,16 @@
   color: var(--line-strong);
 }
 
+a.footer-name {
+  color: inherit;
+  text-decoration: none;
+}
+
+a.footer-name:hover {
+  color: var(--text-soft);
+  text-decoration: underline;
+}
+
 .nav-pending-badge {
   display: inline-flex;
   align-items: center;

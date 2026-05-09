@@ -60,7 +60,12 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
       <footer className="layout-footer">
         <div className="container footer-inner">
-          <span className="footer-name">Manuel Díaz-Meco Terrés</span>
+          <a
+            className="footer-name"
+            href="https://www.linkedin.com/in/manuel-diaz-meco-terres/"
+            target="_blank"
+            rel="noopener noreferrer"
+          >Manuel Díaz-Meco Terrés</a>
           <span className="footer-sep">·</span>
           <span className="footer-desc">Master's Thesis in AI &amp; Analytics</span>
         </div>
