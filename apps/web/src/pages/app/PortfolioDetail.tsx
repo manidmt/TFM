@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { api, ApiError } from '../../api/client';
-import type { PortfolioDetailOut, AssetOut, PortfolioAnalysisOut, TickerOut, VolatilityClass } from '../../api/types';
+import type { PortfolioDetailOut, AssetOut, PortfolioAnalysisOut, TickerOut, VolatilityClass, PortfolioVaROut } from '../../api/types';
 import SignalBadge from '../../components/SignalBadge';
 import TickerCombobox from '../../components/TickerCombobox';
 import './PortfolioDetail.css';
@@ -38,9 +38,9 @@ const PROXY_COLOR: Record<string, string> = {
 };
 
 const SIGNAL_COLOR: Record<string, string> = {
-  low: '#4ade80',
-  medium: '#f59e0b',
-  high: '#ef4444',
+  low: 'var(--low)',
+  medium: 'var(--medium)',
+  high: 'var(--high)',
 };
 
 function timeAgo(iso: string): string {
@@ -411,6 +411,16 @@ export default function PortfolioDetail() {
           {analysis && <AnalysisResult result={analysis} />}
         </section>
       )}
+
+      {!isEditing && analysis && (
+        <section className="var-section">
+          <h3 className="section-title">Value at Risk</h3>
+          <VaRSection
+            portfolioId={portfolioId!}
+            defaultRegime={analysis.portfolio_signal ?? 'all'}
+          />
+        </section>
+      )}
     </div>
   );
 }
@@ -470,9 +480,9 @@ function DonutChart({ groups }: { groups: PortfolioAnalysisOut['asset_groups'] }
 
 function ProbBars({ p_low, p_medium, p_high }: { p_low: number; p_medium: number; p_high: number }) {
   const bars = [
-    { label: 'P(low)', value: p_low, color: '#4ade80' },
-    { label: 'P(medium)', value: p_medium, color: '#f59e0b' },
-    { label: 'P(high)', value: p_high, color: '#ef4444' },
+    { label: 'P(low)', value: p_low, color: 'var(--low)' },
+    { label: 'P(medium)', value: p_medium, color: 'var(--medium)' },
+    { label: 'P(high)', value: p_high, color: 'var(--high)' },
   ];
   return (
     <div className="prob-bars">
@@ -490,6 +500,184 @@ function ProbBars({ p_low, p_medium, p_high }: { p_low: number; p_medium: number
     </div>
   );
 }
+
+// ---------------------------------------------------------------------------
+// VaR histogram
+// ---------------------------------------------------------------------------
+
+const N_BINS = 40;
+
+function VaRHistogram({ distribution, var95 }: { distribution: number[]; var95: number }) {
+  if (!distribution.length) return null;
+
+  const min = distribution[0];
+  const max = distribution[distribution.length - 1];
+  const range = max - min || 1;
+  const binWidth = range / N_BINS;
+
+  const bins = new Array<number>(N_BINS).fill(0);
+  for (const ret of distribution) {
+    const idx = Math.min(N_BINS - 1, Math.floor((ret - min) / binWidth));
+    bins[idx]++;
+  }
+  const maxCount = Math.max(...bins) || 1;
+
+  const W = 400;
+  const H = 72;
+  const barW = W / N_BINS;
+  // threshold line: position of -var95 (the actual return at the 5th pct)
+  const thresholdX = Math.max(0, Math.min(W, ((-var95 - min) / range) * W));
+
+  return (
+    <div className="var-histogram-wrap">
+      <svg viewBox={`0 0 ${W} ${H}`} className="var-histogram-svg" preserveAspectRatio="none">
+        {bins.map((count, i) => {
+          const binCenter = min + (i + 0.5) * binWidth;
+          const h = (count / maxCount) * H;
+          return (
+            <rect
+              key={i}
+              x={i * barW + 0.5}
+              y={H - h}
+              width={barW - 1}
+              height={h}
+              fill={binCenter < 0 ? 'var(--high)' : 'var(--line)'}
+              fillOpacity={binCenter < 0 ? 0.65 : 0.5}
+            />
+          );
+        })}
+        <line
+          x1={thresholdX} y1={0}
+          x2={thresholdX} y2={H}
+          stroke="var(--high)"
+          strokeWidth="1.5"
+          strokeDasharray="4 3"
+        />
+      </svg>
+      <div className="var-histogram-labels">
+        <span>{(distribution[0] * 100).toFixed(1)}%</span>
+        <span className="var-histogram-mid">0%</span>
+        <span>{(distribution[distribution.length - 1] * 100).toFixed(1)}%</span>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// VaR section
+// ---------------------------------------------------------------------------
+
+const REGIME_OPTIONS: string[] = ['low', 'medium', 'high', 'all'];
+const REGIME_LABEL: Record<string, string> = {
+  low: 'Low vol',
+  medium: 'Medium vol',
+  high: 'High vol',
+  all: 'All',
+};
+
+function VaRSection({
+  portfolioId,
+  defaultRegime,
+}: {
+  portfolioId: string;
+  defaultRegime: string;
+}) {
+  const [varData, setVarData] = useState<PortfolioVaROut | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [regime, setRegime] = useState<string>(defaultRegime);
+
+  function fetchVaR(r: string) {
+    setRegime(r);
+    setLoading(true);
+    setVarData(null);
+    api
+      .post<PortfolioVaROut>(`/api/private/portfolios/${portfolioId}/var`, { regime: r })
+      .then(setVarData)
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }
+
+  // Auto-fetch when defaultRegime (analysis result) changes
+  useEffect(() => {
+    setRegime(defaultRegime);
+    fetchVaR(defaultRegime);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [portfolioId, defaultRegime]);
+
+  const regimeLabel =
+    regime === 'all'
+      ? 'All regimes'
+      : `${regime.charAt(0).toUpperCase() + regime.slice(1)} volatility regime`;
+
+  return (
+    <div className="var-container">
+      {/* Regime tabs */}
+      <div className="var-regime-tabs">
+        {REGIME_OPTIONS.map((r) => (
+          <button
+            key={r}
+            className={`var-regime-tab${regime === r ? ' active' : ''}`}
+            onClick={() => fetchVaR(r)}
+            disabled={loading}
+          >
+            {REGIME_LABEL[r]}
+            {r === defaultRegime && r !== 'all' && (
+              <span className="var-predicted-dot" title="Predicted regime" />
+            )}
+          </button>
+        ))}
+      </div>
+
+      {loading && <p className="var-loading">Computing…</p>}
+
+      {varData && !loading && (
+        <>
+          <p className="var-subtitle">
+            {regimeLabel}
+            <span className="var-subtitle-scenarios">· {varData.scenario_count} historical days</span>
+          </p>
+
+          {varData.low_sample_warning && (
+            <div className="var-warning">
+              Low sample size ({varData.scenario_count} days). VaR estimate is unreliable.
+            </div>
+          )}
+
+          {/* Metric cards */}
+          <div className="var-metric-cards">
+            <div className="var-metric-card">
+              <p className="var-metric-label">1-day VaR 95%</p>
+              <p className="var-metric-value">{(varData.var_95 * 100).toFixed(2)}%</p>
+              <p className="var-metric-hint">5% chance of exceeding this loss</p>
+            </div>
+            <div className="var-metric-card">
+              <p className="var-metric-label">1-day VaR 99%</p>
+              <p className="var-metric-value">{(varData.var_99 * 100).toFixed(2)}%</p>
+              <p className="var-metric-hint">1% chance of exceeding this loss</p>
+            </div>
+            <div className="var-metric-card">
+              <p className="var-metric-label">CVaR 95% (ES)</p>
+              <p className="var-metric-value">{(varData.cvar_95 * 100).toFixed(2)}%</p>
+              <p className="var-metric-hint">Mean loss in worst 5% of days</p>
+            </div>
+          </div>
+
+          {/* Histogram */}
+          {varData.histogram.length > 0 && (
+            <div className="var-histogram-section">
+              <p className="var-histogram-title">Daily return distribution · dashed line = VaR 95%</p>
+              <VaRHistogram distribution={varData.histogram} var95={varData.var_95} />
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// AnalysisResult
+// ---------------------------------------------------------------------------
 
 function AnalysisResult({ result }: { result: PortfolioAnalysisOut }) {
   const uniqueProxies = new Set(result.asset_groups.map((g) => g.asset_id)).size;
@@ -549,9 +737,9 @@ function AnalysisResult({ result }: { result: PortfolioAnalysisOut }) {
             </div>
             {p.p_low != null && p.p_medium != null && p.p_high != null && (
               <div className="analysis-pos-minibar">
-                <div style={{ width: `${p.p_low * 100}%`, background: '#4ade80' }} />
-                <div style={{ width: `${p.p_medium * 100}%`, background: '#f59e0b' }} />
-                <div style={{ width: `${p.p_high * 100}%`, background: '#ef4444' }} />
+                <div style={{ width: `${p.p_low * 100}%`, background: 'var(--low)' }} />
+                <div style={{ width: `${p.p_medium * 100}%`, background: 'var(--medium)' }} />
+                <div style={{ width: `${p.p_high * 100}%`, background: 'var(--high)' }} />
               </div>
             )}
             {p.p_low != null && (

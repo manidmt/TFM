@@ -113,6 +113,16 @@ export interface PortfolioAnalysisOut {
   missing_predictions: string[];
 }
 
+export interface PortfolioVaROut {
+  var_95: number;
+  var_99: number;
+  cvar_95: number;
+  regime_filter: string;
+  scenario_count: number;
+  low_sample_warning: boolean;
+  histogram: number[];
+}
+
 // Admin user management
 export interface UserAdminOut {
   user_id: string;

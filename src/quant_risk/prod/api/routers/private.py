@@ -52,6 +52,8 @@ from quant_risk.prod.auth.portfolios import (
 )
 from quant_risk.prod.portfolio_analysis import analyze_portfolio_orm
 from quant_risk.prod.serving.duckdb import ServingDB
+from quant_risk.prod.var_engine import VaRResult, compute_portfolio_var
+from quant_risk.prod.assets import load_asset_catalog
 
 import duckdb
 from fastapi.responses import StreamingResponse
@@ -61,6 +63,8 @@ from quant_risk.prod.api.config import AppConfig
 from quant_risk.prod.chat.service import chat_stream
 
 router = APIRouter(prefix="/api/private", tags=["private"])
+
+_ASSETS_CONFIG = "config/prod/assets.yaml"
 
 
 # ---------------------------------------------------------------------------
@@ -144,6 +148,20 @@ class PortfolioAnalysisOut(BaseModel):
 
 class AnalyzeRequest(BaseModel):
     positions: list[PositionIn] | None = None
+
+
+class VaRRequest(BaseModel):
+    regime: str | None = None  # "low" | "medium" | "high" | "all"; None → use last signal
+
+
+class PortfolioVaROut(BaseModel):
+    var_95: float
+    var_99: float
+    cvar_95: float
+    regime_filter: str
+    scenario_count: int
+    low_sample_warning: bool
+    histogram: list[float]
 
 
 class ChatMessage(BaseModel):
@@ -377,6 +395,80 @@ def analyze_portfolio_endpoint(
         portfolio_p_high=result.portfolio_p_high,
         portfolio_signal=result.portfolio_signal,
         missing_predictions=result.missing_predictions,
+    )
+
+
+@router.post("/portfolios/{portfolio_id}/var", response_model=PortfolioVaROut)
+def portfolio_var(
+    portfolio_id: str,
+    body: VaRRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_auth_db),
+    research_db: duckdb.DuckDBPyConnection = Depends(get_research_db),
+):
+    """Compute regime-conditioned 1-day Historical Simulation VaR for a portfolio."""
+    try:
+        portfolio = get_portfolio(db, portfolio_id, current_user.id)
+    except PortfolioNotFoundError as exc:
+        _handle_portfolio_errors(exc)
+
+    if not portfolio.positions:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Portfolio has no positions.",
+        )
+
+    # Determine regime filter: explicit body param → last analysis signal → "all"
+    regime_filter = body.regime or portfolio.last_analysis_signal or "all"
+    if regime_filter not in ("low", "medium", "high", "all"):
+        regime_filter = "all"
+
+    # Aggregate positions by proxy_asset_id and normalize weights
+    asset_weights: dict[str, float] = {}
+    for pos in portfolio.positions:
+        asset_weights[pos.proxy_asset_id] = (
+            asset_weights.get(pos.proxy_asset_id, 0.0) + pos.weight_pct
+        )
+    total_w = sum(asset_weights.values())
+    if total_w > 0:
+        asset_weights = {k: v / total_w for k, v in asset_weights.items()}
+
+    # Map proxy_asset_id → source_ticker
+    try:
+        catalog = load_asset_catalog(_ASSETS_CONFIG)
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Asset catalog not available.",
+        )
+    ticker_map = {a.asset_id: a.source_ticker for a in catalog}
+    ticker_weights = [
+        (ticker_map[aid], w)
+        for aid, w in asset_weights.items()
+        if aid in ticker_map
+    ]
+
+    if not ticker_weights:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="None of the portfolio positions map to a known asset.",
+        )
+
+    try:
+        result: VaRResult = compute_portfolio_var(research_db, ticker_weights, regime_filter)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        )
+
+    return PortfolioVaROut(
+        var_95=result.var_95,
+        var_99=result.var_99,
+        cvar_95=result.cvar_95,
+        regime_filter=result.regime_filter,
+        scenario_count=result.scenario_count,
+        low_sample_warning=result.low_sample_warning,
+        histogram=result.histogram,
     )
 
 
