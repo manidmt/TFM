@@ -1,0 +1,152 @@
+.landing {
+  /* no top padding — the hero section takes the full top area */
+}
+
+.hero {
+  position: relative;
+  text-align: center;
+  min-height: calc(100vh - 56px); /* full viewport minus nav height */
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+}
+
+.hero-content {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  padding: var(--space-8) 0;
+}
+
+.hero-greeting {
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 0.875rem;
+  color: var(--text-faint);
+  letter-spacing: 0.03em;
+  margin-bottom: var(--space-2);
+}
+
+.hero-user {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.85rem;
+  color: var(--accent-soft);
+  margin-bottom: var(--space-3);
+}
+
+.hero-title {
+  font-family: 'Newsreader', Georgia, serif;
+  font-size: clamp(3rem, 9vw, 5.5rem);
+  font-weight: 400;
+  color: var(--text);
+  letter-spacing: -0.025em;
+  margin: 0 0 var(--space-2);
+  line-height: 1.02;
+}
+
+.hero-thesis {
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--text-faint);
+  margin-bottom: var(--space-5);
+}
+
+.hero-desc {
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 1.0625rem;
+  color: var(--text-soft);
+  max-width: 500px;
+  margin: 0 auto var(--space-7);
+  line-height: 1.7;
+}
+
+.hero-actions {
+  display: flex;
+  gap: var(--space-3);
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+/* Clean text-style action links — no big pill containers */
+.action-block {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px var(--space-4);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  text-decoration: none;
+  color: var(--text);
+  background: transparent;
+  transition: border-color 0.2s, color 0.2s, background 0.2s;
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 0.9375rem;
+  font-weight: 400;
+  letter-spacing: 0.005em;
+}
+
+.action-block:first-child {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.action-block:first-child:hover {
+  background: color-mix(in srgb, var(--accent) 88%, white);
+  border-color: color-mix(in srgb, var(--accent) 88%, white);
+}
+
+.action-block:last-child:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.action-label {
+  /* inherited from parent */
+}
+
+.action-arrow {
+  font-size: 1rem;
+  opacity: 0.65;
+}
+
+.about {
+  border-top: 1px solid var(--line);
+  padding-top: var(--space-8);
+  padding-bottom: var(--space-8);
+  margin-top: var(--space-7);
+}
+
+.about-inner {
+  max-width: 580px;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.about-text {
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 1rem;
+  color: var(--text-soft);
+  line-height: 1.75;
+}
+
+.about-text em {
+  font-style: normal;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.about-methodology-link {
+  display: inline-block;
+  margin-top: var(--space-3);
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 0.9375rem;
+  color: var(--accent-soft);
+  text-decoration: none;
+  transition: color 0.15s;
+}
+
+.about-methodology-link:hover {
+  color: var(--accent);
+}

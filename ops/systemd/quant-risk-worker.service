@@ -1,0 +1,42 @@
+# quant-risk-worker.service — systemd one-shot service for the daily batch.
+#
+# Launched by quant-risk-worker.timer.
+# Runs the worker container via Docker Compose and exits when done.
+# Edge routing is handled by Cloudflare Tunnel (cloudflared) — not by nginx.
+#
+# Install:
+#   sudo cp ops/systemd/quant-risk-worker.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#
+# Reference: rpi5.md §10.1, §13.2
+
+[Unit]
+Description=quant-risk daily production worker
+Documentation=https://github.com/manidmt/quant-risk-tfm
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+
+# Repo clone on the RPi5 — used to resolve the compose file path.
+WorkingDirectory=/home/manidmt/Desktop/risk/quant-risk-tfm
+
+# Run the worker container and remove it after completion (--rm).
+# The worker profile ensures only the worker service is spun up.
+ExecStart=/usr/bin/docker compose \
+    --file /home/manidmt/Desktop/risk/quant-risk-tfm/ops/docker/compose.rpi5.yml \
+    --env-file /home/manidmt/Desktop/risk/quant-risk-tfm/ops/docker/.env \
+    run --rm worker
+
+# Allow up to 2 hours for a full batch run (all 6 assets + retries).
+TimeoutStartSec=7200
+
+# Redirect all output to the journal (view with: journalctl -u quant-risk-worker).
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=quant-risk-worker
+
+# Run as root so docker CLI is available; the container itself drops to appuser.
+User=root

@@ -57,6 +57,7 @@ def make_model(cfg: XGBConfig):
         n_jobs=cfg.n_jobs,
         random_state=cfg.random_state,
         eval_metric=cfg.eval_metric,
+        early_stopping_rounds=cfg.early_stopping_rounds,
         device="cpu",
     )
     model._quant_risk_cfg = cfg
@@ -77,14 +78,7 @@ def fit(
     if X_valid is not None and y_valid is not None:
         x_valid = to_numpy_x(X_valid, dtype=np.float32)
         y_valid_np = to_numpy_y(y_valid)
-        fit_kwargs = {"eval_set": [(x_valid, y_valid_np)], "verbose": False}
-        if cfg.early_stopping_rounds is not None:
-            fit_kwargs["early_stopping_rounds"] = cfg.early_stopping_rounds
-        try:
-            model.fit(x_train, y_train_np, **fit_kwargs)
-        except TypeError:
-            fit_kwargs.pop("early_stopping_rounds", None)
-            model.fit(x_train, y_train_np, **fit_kwargs)
+        model.fit(x_train, y_train_np, eval_set=[(x_valid, y_valid_np)], verbose=False)
     else:
         model.fit(x_train, y_train_np, verbose=False)
 

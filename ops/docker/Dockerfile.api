@@ -1,0 +1,51 @@
+# Dockerfile.api — lightweight FastAPI backend image for the RPi5.
+#
+# Includes only the API runtime stack (FastAPI, SQLAlchemy, DuckDB, Postgres
+# driver).  Does NOT include the ML inference stack (torch, xgboost, tabpfn).
+# The API serves pre-computed predictions from serving.duckdb; it never runs
+# model inference directly.
+#
+# Build context: repository root
+#   docker build -f ops/docker/Dockerfile.api -t quant-risk-api .
+#
+# Reference: rpi5.md §13.1, §26.1
+
+FROM python:3.11-slim AS base
+
+# System deps:
+#   gcc / libpq-dev — needed by psycopg2-binary build (falls back to binary wheel
+#   on arm64, but gcc is kept for any source-built transitive deps).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        gcc \
+        libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# ---- deps layer (cached unless requirements-api.txt changes) ----
+COPY requirements-api.txt .
+RUN pip install --no-cache-dir -r requirements-api.txt
+
+# ---- application code ----
+# Copy only what the API needs; keep the image lean.
+COPY pyproject.toml README.md ./
+COPY src/ src/
+COPY config/ config/
+
+# Install the local package (quant_risk) without pulling in extra deps.
+RUN pip install --no-cache-dir --no-deps -e .
+
+# Non-root user for runtime security.
+RUN useradd -m -u 1000 appuser
+USER appuser
+
+EXPOSE 8000
+
+# Uvicorn with 2 workers — sufficient for RPi5 single-node serving.
+# The number of workers can be overridden via the UVICORN_WORKERS env var.
+CMD ["uvicorn", "quant_risk.prod.api.app:app", \
+     "--host", "0.0.0.0", \
+     "--port", "8000", \
+     "--workers", "2", \
+     "--log-level", "info"]

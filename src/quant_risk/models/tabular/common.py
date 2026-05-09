@@ -40,7 +40,12 @@ def to_numpy_x(X: Any, dtype=np.float32) -> np.ndarray:
         arr = X.to_numpy()
     else:
         arr = np.asarray(X)
-    return np.asarray(arr, dtype=dtype)
+    arr = np.asarray(arr, dtype=dtype)
+    # Econometric chain models (EGARCH) can produce inf due to numerical instability.
+    # XGBoost rejects inf; nan is treated as missing and handled internally.
+    if np.any(np.isinf(arr)):
+        arr = np.where(np.isinf(arr), np.nan, arr)
+    return arr
 
 
 def to_numpy_y(y: Any) -> np.ndarray:

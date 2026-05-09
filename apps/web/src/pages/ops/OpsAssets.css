@@ -1,0 +1,10 @@
+@import './OpsOverview.css';
+
+.ops-assets {
+  padding-top: var(--space-6);
+  padding-bottom: var(--space-8);
+}
+
+.ops-back {
+  margin-bottom: var(--space-5);
+}

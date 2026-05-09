@@ -1,0 +1,123 @@
+.portfolio-list {
+  padding-top: var(--space-7);
+  padding-bottom: var(--space-8);
+}
+
+.portfolio-items {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 var(--space-7);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.portfolio-item {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.portfolio-item-link {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--space-3) var(--space-4);
+  text-decoration: none;
+  transition: background 0.15s;
+  gap: var(--space-3);
+}
+
+.portfolio-item-link:hover {
+  background: var(--bg-soft);
+}
+
+.portfolio-item-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.portfolio-name {
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.portfolio-meta {
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 0.78rem;
+  color: var(--text-soft);
+}
+
+.portfolio-analysed {
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 0.72rem;
+  color: var(--text-faint);
+}
+
+.portfolio-item-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-shrink: 0;
+}
+
+.portfolio-no-analysis {
+  font-size: 0.72rem;
+  color: var(--text-faint);
+}
+
+.portfolio-arrow {
+  color: var(--text-faint);
+}
+
+.create-section {
+  border-top: 1px solid var(--line);
+  padding-top: var(--space-5);
+  max-width: 480px;
+}
+
+.section-title {
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--text-soft);
+  margin-bottom: var(--space-3);
+}
+
+.create-form {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.create-form .field-input {
+  flex: 1;
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 0.9375rem;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 9px var(--space-3);
+  outline: none;
+}
+
+.create-form .field-input:focus {
+  border-color: var(--accent-soft);
+}
+
+.loading-text,
+.empty-text {
+  font-size: 0.9rem;
+  color: var(--text-faint);
+  margin-bottom: var(--space-5);
+}
+
+.error-text {
+  color: var(--high);
+  font-size: 0.875rem;
+  margin-bottom: var(--space-3);
+}

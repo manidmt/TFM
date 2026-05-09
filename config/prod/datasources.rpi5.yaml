@@ -1,0 +1,67 @@
+# Production datasources config for the RPi5 deployment lane.
+#
+# This file is the production counterpart of config/datasources.yaml.
+# It is used exclusively by the RPi5 worker and production inference pipeline.
+# The research lane continues to use config/datasources.yaml unchanged.
+#
+# Runtime path on RPi5: /srv/quant-risk/db/financial_data.duckdb
+# Override the db path via the QUANT_RISK_DB_PATH environment variable if needed.
+#
+# Sections of rpi5.md that govern this file: §6, §7, §10, §11.1, §26.1, §26.3
+
+db:
+  # Resolved at runtime: QUANT_RISK_DB_PATH env var takes precedence over this value.
+  path: /srv/quant-risk/db/financial_data.duckdb
+
+prices:
+  # Exact same tickers as the production asset catalog (config/prod/assets.yaml).
+  tickers:
+    - "^GSPC"
+    - "^STOXX50E"
+    - "BTC-USD"
+    - "TLT"
+    - "SHY"
+    - "GLD"
+  default_start: "2010-01-01"
+  auto_adjust: true
+  lookback_buffer_days: 5
+
+macro:
+  default_start: "2010-01-01"
+  lookback_buffer_days: 10
+  fred_series:
+    VIXCLS: vix
+    WALCL: fed_assets
+    WTREGEN: tga
+    RRPONTSYD: rrp
+    M2SL: m2
+    DFF: ffr
+    SOFR: sofr
+
+gkg:
+  # Locked to the same stable profile used in the research lane.
+  # Do not change this without retraining production champions.
+  profile_name: "gkg_v1_light"
+  profile_version: "2026-03-13"
+  profile_mode: "light_daily"
+  enabled: true
+  raw_table: "gdelt_gkg_raw"
+  daily_table: "news_features_daily"
+  start: "2020-01-01"
+  lookback_buffer_days: 14
+  publication_lag_bdays: 1
+  store_raw: false
+  timeout_seconds: 45
+  max_retries: 8
+  retry_backoff_seconds: 3.0
+  retry_max_sleep_seconds: 240.0
+  request_pause_seconds: 1.0
+  sample_interval_minutes: 180
+  max_files_per_day: 8
+  max_files_total: 0
+  topics:
+    macro_us: "(inflation OR recession OR unemployment OR GDP OR tariff OR treasury)"
+    fed_inflation: "(\"Federal Reserve\" OR Powell OR CPI OR PCE OR \"interest rates\")"
+    rates_yields: "(\"treasury yield\" OR \"bond yield\" OR SOFR OR \"fed funds\")"
+    crypto_market: "(bitcoin OR ethereum OR crypto OR cryptocurrency OR stablecoin)"
+    geopolitical_risk: "(war OR conflict OR sanctions OR tariff OR invasion)"

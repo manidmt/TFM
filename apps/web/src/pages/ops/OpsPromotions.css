@@ -1,0 +1,25 @@
+@import './OpsOverview.css';
+
+.ops-promotions {
+  padding-top: var(--space-6);
+  padding-bottom: var(--space-8);
+}
+
+.ops-back {
+  margin-bottom: var(--space-5);
+}
+
+.error-cell {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.75rem;
+  color: var(--high);
+  max-width: 240px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.page-subtitle {
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 0.875rem;
+  color: var(--text-soft);
+}

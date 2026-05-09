@@ -10,7 +10,6 @@ env/
 
 .DS_Store
 Thumbs.db
-poetry.lock
 
 *.sh
 *.lock
@@ -57,10 +56,22 @@ optuna_studies*.db
 # Model checkpoints
 *.ckpt
 
+# Frontend build artefacts
+/static/
+apps/web/node_modules/
+apps/web/dist/
+
 # Claude Code tooling
 .agents/
 skills-lock.json
+.playwright/
+.playwright-cli/
+.superpowers/
+.claude/settings.local.json
+
+# Engram (memory config committed, local DB not)
+.engram/engram.db
+.engram/*.bak
 
 # Reports
 /reports/
-/docs/

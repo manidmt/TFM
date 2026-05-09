@@ -1,0 +1,46 @@
+# Production asset catalog for risk.manidmt.es (V1).
+#
+# This file is the authoritative source for the six production proxies.
+# It is versioned in the repo — never stored in a database.
+# asset_id is the stable semantic identifier used across the entire production stack.
+#
+# Sections of rpi5.md that govern this file: §4, §6, §26.1, §26.4
+
+version: "1.0.0"
+
+assets:
+  - asset_id: us_equities
+    display_name: "US Equities"
+    source_ticker: "^GSPC"
+    category: Equity
+    short_description: "Broad US equity market proxy via S&P 500."
+
+  - asset_id: euro_equities
+    display_name: "Euro Area Equities"
+    source_ticker: "^STOXX50E"
+    category: Equity
+    short_description: "Euro area large-cap equity proxy via EURO STOXX 50."
+
+  - asset_id: bitcoin
+    display_name: "Bitcoin"
+    source_ticker: "BTC-USD"
+    category: Crypto
+    short_description: "Bitcoin in USD — leading digital asset."
+
+  - asset_id: long_us_treasuries
+    display_name: "Long US Treasuries"
+    source_ticker: "TLT"
+    category: Rates
+    short_description: "US long-duration government bond proxy via iShares 20+ Year Treasury ETF."
+
+  - asset_id: short_us_treasuries
+    display_name: "Short US Treasuries"
+    source_ticker: "SHY"
+    category: Rates
+    short_description: "US short-duration government bond proxy via iShares 1-3 Year Treasury ETF."
+
+  - asset_id: gold
+    display_name: "Gold"
+    source_ticker: "GLD"
+    category: Commodity
+    short_description: "Gold proxy via SPDR Gold Shares ETF."

@@ -1,0 +1,31 @@
+# Cloudflare Tunnel — ingress snippet for risk.manidmt.es
+#
+# Add this entry to ~/.cloudflared/config.yml on the RPi5,
+# BEFORE the catch-all rule at the bottom.
+#
+# The nginx container in compose.rpi5.yml listens on 127.0.0.1:8080.
+# It serves the React frontend and proxies /api/ to the FastAPI container.
+# Cloudflare handles TLS; the tunnel speaks plain HTTP to localhost.
+#
+# Example ~/.cloudflared/config.yml structure after adding:
+#
+#   tunnel: <your-tunnel-id>
+#   credentials-file: /home/<user>/.cloudflared/<tunnel-id>.json
+#
+#   ingress:
+#     # ... your existing hostname entries ...
+#
+#     - hostname: risk.manidmt.es
+#       service: http://localhost:8080
+#
+#     # catch-all must remain last
+#     - service: http_status:404
+#
+# After editing, restart cloudflared:
+#   sudo systemctl restart cloudflared
+#
+# DNS: make sure risk.manidmt.es has a CNAME → <tunnel-id>.cfargotunnel.com
+# in the Cloudflare dashboard (or run: cloudflared tunnel route dns <tunnel-id> risk.manidmt.es)
+
+- hostname: risk.manidmt.es
+  service: http://localhost:8080

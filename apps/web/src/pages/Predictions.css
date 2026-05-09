@@ -1,0 +1,102 @@
+.predictions {
+  position: relative;
+  min-height: calc(100vh - 56px);
+  overflow: hidden;
+}
+
+.predictions-inner {
+  position: relative;
+  z-index: 1;
+  padding-top: var(--space-7);
+  padding-bottom: var(--space-8);
+}
+
+
+.asset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: var(--space-4);
+}
+
+.asset-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.asset-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.asset-id {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.75rem;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 2px;
+}
+
+.asset-label {
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 1rem;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.forecast-date {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.75rem;
+  color: var(--text-faint);
+}
+
+.forecast-date span {
+  color: var(--text-soft);
+}
+
+.no-pred {
+  font-size: 0.875rem;
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+.card-link {
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 0.8125rem;
+  color: var(--accent-soft);
+  text-decoration: none;
+  margin-top: auto;
+  padding-top: var(--space-1);
+  border-top: 1px solid var(--line);
+}
+
+.card-link:hover {
+  color: var(--accent);
+}
+
+.error-text {
+  color: var(--high);
+  font-size: 0.9rem;
+  margin-bottom: var(--space-4);
+}
+
+/* Regime-colored left border */
+.asset-card.regime-low    { border-left: 4px solid var(--low); }
+.asset-card.regime-medium { border-left: 4px solid var(--medium); }
+.asset-card.regime-high   { border-left: 4px solid var(--high); }
+
+/* Sparkline strip label */
+.sparkline-label {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.58rem;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 4px;
+}

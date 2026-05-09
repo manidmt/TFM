@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//tmp/**)",
+      "Bash(timedatectl)",
+      "Bash(.venv/bin/python -c \"import yfinance, duckdb; print\\('OK yfinance', yfinance.__version__, '| duckdb', duckdb.__version__\\)\")",
+      "Bash(PYTHONPATH=src .venv/bin/python scripts/ingest_prices.py)",
+      "Bash(PYTHONPATH=src .venv/bin/python scripts/ingest_macro.py)",
+      "Bash(.venv/bin/python -c ' *)",
+      "Bash(crontab /tmp/crontab_new.txt)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:4747/health)"
+    ],
+    "additionalDirectories": [
+      "/home/manidmt/Desktop/risk/static/assets",
+      "/tmp"
+    ]
+  }
+}

@@ -1,0 +1,15 @@
+# API-only runtime dependencies (no ML stack).
+# Used by ops/docker/Dockerfile.api to build the lightweight API image.
+# Keep in sync with [tool.poetry.dependencies] in pyproject.toml.
+
+fastapi>=0.111.0,<1.0.0
+uvicorn[standard]>=0.29.0,<1.0.0
+sqlalchemy>=2.0.0,<3.0.0
+psycopg2-binary>=2.9.0,<3.0.0
+pydantic>=2.0.0,<3.0.0
+duckdb>=1.1.0,<2.0.0
+pyyaml>=6.0,<7.0
+pandas>=2.2.0,<3.0.0
+numpy>=1.26.0,<3.0.0
+python-multipart>=0.0.9
+openai>=1.0.0,<2.0.0
