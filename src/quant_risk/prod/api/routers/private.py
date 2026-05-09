@@ -120,6 +120,12 @@ class PositionAnalysisOut(BaseModel):
     p_medium: float | None
     p_high: float | None
     forecast_date: str | None
+    adj_p_low: float | None
+    adj_p_medium: float | None
+    adj_p_high: float | None
+    adj_predicted_class: str | None
+    vol_ratio: float | None
+    has_risk_adjustment: bool
 
 
 class AssetGroupOut(BaseModel):
@@ -329,11 +335,14 @@ def analyze_portfolio_endpoint(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_auth_db),
     serving_db: ServingDB = Depends(get_serving_db),
+    research_db: duckdb.DuckDBPyConnection = Depends(get_research_db),
 ):
     """Run portfolio analysis.
 
     Pass ``positions`` in the request body for what-if analysis without
     saving.  Omit ``positions`` to analyse the saved portfolio state.
+    Idiosyncratic risk adjustment (vol + kurtosis tilt) is applied per
+    position using 2-year historical data from the research database.
     """
     try:
         portfolio = get_portfolio(db, portfolio_id, current_user.id)
@@ -346,8 +355,21 @@ def analyze_portfolio_endpoint(
         else None
     )
 
+    # Build proxy_asset_id → source_ticker map for risk adjustment
     try:
-        result = analyze_portfolio_orm(portfolio, serving_db, position_overrides=overrides)
+        catalog = load_asset_catalog(_ASSETS_CONFIG)
+        ticker_map = {a.asset_id: a.source_ticker for a in catalog}
+    except FileNotFoundError:
+        ticker_map = {}
+
+    try:
+        result = analyze_portfolio_orm(
+            portfolio,
+            serving_db,
+            position_overrides=overrides,
+            research_db=research_db,
+            source_ticker_map=ticker_map,
+        )
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
@@ -374,6 +396,12 @@ def analyze_portfolio_endpoint(
                 p_medium=pa.p_medium,
                 p_high=pa.p_high,
                 forecast_date=str(pa.forecast_date) if pa.forecast_date else None,
+                adj_p_low=pa.adj_p_low,
+                adj_p_medium=pa.adj_p_medium,
+                adj_p_high=pa.adj_p_high,
+                adj_predicted_class=pa.adj_predicted_class,
+                vol_ratio=pa.vol_ratio,
+                has_risk_adjustment=pa.has_risk_adjustment,
             )
             for pa in result.positions
         ],

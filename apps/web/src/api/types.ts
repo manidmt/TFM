@@ -87,6 +87,12 @@ export interface PositionAnalysisOut {
   p_medium: number | null;
   p_high: number | null;
   forecast_date: string | null;
+  adj_p_low: number | null;
+  adj_p_medium: number | null;
+  adj_p_high: number | null;
+  adj_predicted_class: VolatilityClass | null;
+  vol_ratio: number | null;
+  has_risk_adjustment: boolean;
 }
 
 export interface AssetGroupOut {
