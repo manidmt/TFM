@@ -141,8 +141,7 @@ def compute_risk_adjustments(
     try:
         rows = research_db.execute(f"""
             WITH ticker_list AS (
-                SELECT column0 AS ticker
-                FROM (VALUES {values_sql})
+                SELECT * FROM (VALUES {values_sql}) AS t(ticker)
             )
             SELECT rp.ticker, rp.close
             FROM raw_prices rp
