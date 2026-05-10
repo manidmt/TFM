@@ -54,10 +54,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
 
 from quant_risk.prod.api.deps import (
+    get_research_db_rw,
     get_serving_db,
     get_serving_db_rw,
     require_internal_token,
 )
+from quant_risk.data.fetcher import init_schema as _init_prices_schema
 from quant_risk.prod.schemas import PredictedClass, RunStatus
 from quant_risk.prod.serving.duckdb import ServingDB
 from quant_risk.prod.serving.predictions import persist_prediction
@@ -239,3 +241,86 @@ def push_prediction(
         attempt_no=ctx.attempt_no,
         stored_at=stored_at.isoformat(),
     )
+
+
+# ---------------------------------------------------------------------------
+# Bulk price push — universe tickers for idiosyncratic risk adjustment
+# ---------------------------------------------------------------------------
+
+_MAX_ROWS_PER_BATCH = 5_000
+
+
+class PriceRow(BaseModel):
+    ticker: str = Field(..., min_length=1, max_length=30)
+    date: date
+    open: float | None = None
+    high: float | None = None
+    low: float | None = None
+    close: float
+    volume: int | None = None
+
+
+class PriceBulkIn(BaseModel):
+    rows: list[PriceRow] = Field(..., min_length=1, max_length=_MAX_ROWS_PER_BATCH)
+
+
+class PriceBulkOut(BaseModel):
+    upserted: int
+
+
+@router.post(
+    "/prices/bulk",
+    response_model=PriceBulkOut,
+    status_code=status.HTTP_200_OK,
+)
+def push_prices_bulk(
+    payload: PriceBulkIn,
+    research_db: duckdb.DuckDBPyConnection = Depends(get_research_db_rw),
+    _token: None = Depends(require_internal_token),
+) -> PriceBulkOut:
+    """Upsert a batch of raw price rows into financial_data.duckdb.
+
+    Called by the off-box workstation to keep the ticker universe prices
+    current so ``risk_adjustment.compute_risk_adjustments`` has data for
+    all portfolio positions, not just the six production proxy assets.
+
+    Idempotent: re-pushing the same (ticker, date) pair overwrites the row.
+    """
+    _init_prices_schema(research_db, "raw_prices")
+
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+    rows_data = [
+        (
+            r.ticker,
+            r.date.isoformat(),
+            r.open,
+            r.high,
+            r.low,
+            r.close,
+            r.volume,
+            "push",
+            now,
+        )
+        for r in payload.rows
+    ]
+
+    research_db.executemany(
+        """
+        INSERT INTO raw_prices (ticker, date, open, high, low, close, volume, source, inserted_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (ticker, date) DO UPDATE SET
+            open       = excluded.open,
+            high       = excluded.high,
+            low        = excluded.low,
+            close      = excluded.close,
+            volume     = excluded.volume,
+            source     = excluded.source,
+            inserted_at = excluded.inserted_at
+        """,
+        rows_data,
+    )
+
+    logger.info("pushed %d price rows from off-box workstation", len(rows_data))
+    return PriceBulkOut(upserted=len(rows_data))
