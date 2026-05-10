@@ -59,7 +59,6 @@ from quant_risk.prod.api.deps import (
     get_serving_db_rw,
     require_internal_token,
 )
-from quant_risk.data.fetcher import init_schema as _init_prices_schema
 from quant_risk.prod.schemas import PredictedClass, RunStatus
 from quant_risk.prod.serving.duckdb import ServingDB
 from quant_risk.prod.serving.predictions import persist_prediction
@@ -286,7 +285,20 @@ def push_prices_bulk(
 
     Idempotent: re-pushing the same (ticker, date) pair overwrites the row.
     """
-    _init_prices_schema(research_db, "raw_prices")
+    research_db.execute("""
+        CREATE TABLE IF NOT EXISTS raw_prices (
+            ticker TEXT NOT NULL,
+            date DATE NOT NULL,
+            open DOUBLE,
+            high DOUBLE,
+            low DOUBLE,
+            close DOUBLE,
+            volume BIGINT,
+            source TEXT,
+            inserted_at TIMESTAMP,
+            PRIMARY KEY (ticker, date)
+        )
+    """)
 
     from datetime import datetime, timezone
 
