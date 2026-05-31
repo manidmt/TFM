@@ -722,35 +722,54 @@ function AnalysisResult({ result }: { result: PortfolioAnalysisOut }) {
       {/* Position cards */}
       <h4 className="section-title">By position</h4>
       <div className="analysis-position-cards">
-        {result.positions.map((p) => (
-          <div
-            key={p.label}
-            className="analysis-pos-card"
-            style={{ borderLeftColor: SIGNAL_COLOR[p.predicted_class ?? ''] ?? 'var(--line)' }}
-          >
-            <div className="analysis-pos-header">
-              <span className="analysis-pos-label">{p.label}</span>
-              <SignalBadge signal={p.predicted_class as VolatilityClass | null} size="sm" />
-            </div>
-            <div className="analysis-pos-meta">
-              {p.weight_pct.toFixed(1)}% · {PROXY_NAME[p.proxy_asset_id] ?? p.proxy_asset_id}
-            </div>
-            {p.p_low != null && p.p_medium != null && p.p_high != null && (
-              <div className="analysis-pos-minibar">
-                <div style={{ width: `${p.p_low * 100}%`, background: 'var(--low)' }} />
-                <div style={{ width: `${p.p_medium * 100}%`, background: 'var(--medium)' }} />
-                <div style={{ width: `${p.p_high * 100}%`, background: 'var(--high)' }} />
+        {result.positions.map((p) => {
+          const dispClass = (p.adj_predicted_class ?? p.predicted_class) as VolatilityClass | null;
+          const dispLow = p.adj_p_low ?? p.p_low;
+          const dispMed = p.adj_p_medium ?? p.p_medium;
+          const dispHigh = p.adj_p_high ?? p.p_high;
+          const volRatio = p.vol_ratio;
+          const volColor =
+            volRatio == null ? undefined
+            : volRatio > 1.3 ? 'var(--high)'
+            : volRatio < 0.8 ? 'var(--low)'
+            : 'var(--text-faint)';
+          return (
+            <div
+              key={p.label}
+              className="analysis-pos-card"
+              style={{ borderLeftColor: SIGNAL_COLOR[dispClass ?? ''] ?? 'var(--line)' }}
+            >
+              <div className="analysis-pos-header">
+                <span className="analysis-pos-label">
+                  {p.label}
+                  {p.has_risk_adjustment && volRatio != null && (
+                    <span className="pos-vol-badge" style={{ color: volColor }}>
+                      σ×{volRatio.toFixed(1)}
+                    </span>
+                  )}
+                </span>
+                <SignalBadge signal={dispClass} size="sm" />
               </div>
-            )}
-            {p.p_low != null && (
-              <div className="analysis-pos-pcts">
-                <span>{(p.p_low! * 100).toFixed(0)}%</span>
-                <span>{(p.p_medium! * 100).toFixed(0)}%</span>
-                <span>{(p.p_high! * 100).toFixed(0)}%</span>
+              <div className="analysis-pos-meta">
+                {p.weight_pct.toFixed(1)}% · {PROXY_NAME[p.proxy_asset_id] ?? p.proxy_asset_id}
               </div>
-            )}
-          </div>
-        ))}
+              {dispLow != null && dispMed != null && dispHigh != null && (
+                <div className="analysis-pos-minibar">
+                  <div style={{ width: `${dispLow * 100}%`, background: 'var(--low)' }} />
+                  <div style={{ width: `${dispMed * 100}%`, background: 'var(--medium)' }} />
+                  <div style={{ width: `${dispHigh * 100}%`, background: 'var(--high)' }} />
+                </div>
+              )}
+              {dispLow != null && (
+                <div className="analysis-pos-pcts">
+                  <span>{(dispLow * 100).toFixed(0)}%</span>
+                  <span>{(dispMed! * 100).toFixed(0)}%</span>
+                  <span>{(dispHigh! * 100).toFixed(0)}%</span>
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );

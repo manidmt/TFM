@@ -39,6 +39,8 @@ import logging
 from dataclasses import dataclass, field
 from datetime import date
 
+import duckdb
+
 from quant_risk.prod.auth.models import Portfolio, PortfolioPosition
 from quant_risk.prod.auth.portfolios import PositionInput
 from quant_risk.prod.serving.duckdb import ServingDB
@@ -84,6 +86,13 @@ class PositionAnalysis:
     p_medium: float | None
     p_high: float | None
     forecast_date: date | None
+    # Risk-adjusted probabilities (idiosyncratic vol + kurtosis tilt)
+    adj_p_low: float | None = None
+    adj_p_medium: float | None = None
+    adj_p_high: float | None = None
+    adj_predicted_class: str | None = None
+    vol_ratio: float | None = None   # σ_asset / σ_proxy, e.g. 2.1 for Tesla
+    has_risk_adjustment: bool = False
 
 
 @dataclass
@@ -210,6 +219,9 @@ def analyze_portfolio(
     portfolio_name: str,
     positions: list[PositionInput],
     serving_db: ServingDB,
+    *,
+    research_db: duckdb.DuckDBPyConnection | None = None,
+    source_ticker_map: dict[str, str] | None = None,
 ) -> PortfolioAnalysis:
     """Run the full portfolio analysis pipeline.
 
@@ -224,6 +236,13 @@ def analyze_portfolio(
         Must not be empty.
     serving_db:
         Open ``ServingDB`` connection for reading latest predictions.
+    research_db:
+        Optional DuckDB connection (financial_data.duckdb) used to compute
+        idiosyncratic risk adjustments per position ticker.  When ``None``,
+        no adjustment is applied and proxy probabilities are used as-is.
+    source_ticker_map:
+        Mapping of ``proxy_asset_id → source_ticker`` (e.g. ``"us_equities" →
+        "^GSPC"``).  Required when *research_db* is provided.
 
     Returns
     -------
@@ -265,6 +284,46 @@ def analyze_portfolio(
             )
         )
 
+    # 2b. Apply idiosyncratic risk adjustments (requires research_db + ticker map)
+    if research_db is not None and source_ticker_map:
+        from quant_risk.prod.risk_adjustment import compute_risk_adjustments
+
+        adj_input = {
+            pa.label: (
+                source_ticker_map.get(pa.proxy_asset_id, ""),
+                pa.p_low or 0.0,
+                pa.p_medium or 0.0,
+                pa.p_high or 0.0,
+            )
+            for pa in position_analyses
+            if pa.predicted_class is not None
+            and source_ticker_map.get(pa.proxy_asset_id)
+        }
+        adj_map = compute_risk_adjustments(research_db, adj_input)
+
+        for pa in position_analyses:
+            adj = adj_map.get(pa.label)
+            if adj is not None:
+                pa.adj_p_low = adj.adj_p_low
+                pa.adj_p_medium = adj.adj_p_medium
+                pa.adj_p_high = adj.adj_p_high
+                pa.adj_predicted_class = adj.adj_predicted_class
+                pa.vol_ratio = adj.vol_ratio
+                pa.has_risk_adjustment = True
+            elif pa.predicted_class is not None:
+                # No adjustment data — fall back to proxy probs
+                pa.adj_p_low = pa.p_low
+                pa.adj_p_medium = pa.p_medium
+                pa.adj_p_high = pa.p_high
+                pa.adj_predicted_class = pa.predicted_class
+    else:
+        # No research_db — copy proxy probs as adj probs unchanged
+        for pa in position_analyses:
+            pa.adj_p_low = pa.p_low
+            pa.adj_p_medium = pa.p_medium
+            pa.adj_p_high = pa.p_high
+            pa.adj_predicted_class = pa.predicted_class
+
     # 3. Aggregate by asset_id
     asset_agg: dict[str, dict] = {}
     for pa in position_analyses:
@@ -297,23 +356,22 @@ def analyze_portfolio(
         for aid, v in sorted(asset_agg.items())
     ]
 
-    # 4. Compute portfolio-level weighted signal (exclude assets without predictions)
-    covered_groups = [g for g in asset_groups if g.predicted_class is not None]
+    # 4. Compute portfolio-level weighted signal using per-position adjusted probs.
+    # Positions without predictions are excluded; remaining weights are re-normalised.
+    covered_positions = [pa for pa in position_analyses if pa.adj_predicted_class is not None]
 
-    if not covered_groups:
+    if not covered_positions:
         port_p_low = port_p_medium = port_p_high = 0.0
         port_signal = None
     else:
-        # Re-normalise weights among covered assets only
-        covered_weight_total = sum(g.aggregate_weight for g in covered_groups)
+        covered_weight_total = sum(pa.normalized_weight for pa in covered_positions)
         port_p_low = port_p_medium = port_p_high = 0.0
-        for g in covered_groups:
-            w = g.aggregate_weight / covered_weight_total
-            port_p_low += w * (g.p_low or 0.0)
-            port_p_medium += w * (g.p_medium or 0.0)
-            port_p_high += w * (g.p_high or 0.0)
+        for pa in covered_positions:
+            w = pa.normalized_weight / covered_weight_total
+            port_p_low += w * (pa.adj_p_low or 0.0)
+            port_p_medium += w * (pa.adj_p_medium or 0.0)
+            port_p_high += w * (pa.adj_p_high or 0.0)
 
-        # Dominant class
         probs = (port_p_low, port_p_medium, port_p_high)
         port_signal = _CLASS_ORDER[probs.index(max(probs))]
 
@@ -344,6 +402,8 @@ def analyze_portfolio_orm(
     serving_db: ServingDB,
     *,
     position_overrides: list[PositionInput] | None = None,
+    research_db: duckdb.DuckDBPyConnection | None = None,
+    source_ticker_map: dict[str, str] | None = None,
 ) -> PortfolioAnalysis:
     """Analyse a loaded Portfolio ORM object.
 
@@ -357,6 +417,10 @@ def analyze_portfolio_orm(
     position_overrides:
         If provided, use these positions instead of ``portfolio.positions``.
         Useful for what-if analysis without saving changes.
+    research_db:
+        Optional DuckDB connection for idiosyncratic risk adjustment.
+    source_ticker_map:
+        Mapping of ``proxy_asset_id → source_ticker``.
 
     Returns
     -------
@@ -379,4 +443,6 @@ def analyze_portfolio_orm(
         portfolio_name=portfolio.name,
         positions=positions,
         serving_db=serving_db,
+        research_db=research_db,
+        source_ticker_map=source_ticker_map,
     )

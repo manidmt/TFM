@@ -447,6 +447,16 @@
   font-weight: 600;
   font-size: 0.9rem;
   color: var(--text);
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.pos-vol-badge {
+  font-family: 'IBM Plex Mono', 'Courier New', monospace;
+  font-size: 0.65rem;
+  font-weight: 500;
+  opacity: 0.85;
 }
 
 .analysis-pos-meta {

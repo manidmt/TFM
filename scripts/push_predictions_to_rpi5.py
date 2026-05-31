@@ -57,8 +57,11 @@ from typing import Any
 import urllib.error
 import urllib.request
 
+import duckdb
+
 from quant_risk.prod.assets import AssetInfo, load_asset_catalog
 from quant_risk.prod.schemas import RunStatus
+from quant_risk.prod.ticker_universe import load_ticker_universe
 from quant_risk.prod.worker.ingest import (
     IngestResult,
     SharedIngestResult,
@@ -83,9 +86,8 @@ class Rpi5Client:
     token: str
     timeout: float = _DEFAULT_TIMEOUT_SEC
 
-    def push_prediction(self, payload: dict[str, Any]) -> dict[str, Any]:
-        url = self.base_url.rstrip("/") + "/api/internal/predictions"
-        data = json.dumps(payload).encode("utf-8")
+    def _post(self, path: str, data: bytes) -> dict[str, Any]:
+        url = self.base_url.rstrip("/") + path
         req = urllib.request.Request(
             url,
             data=data,
@@ -102,11 +104,17 @@ class Rpi5Client:
                 return json.loads(body) if body else {}
         except urllib.error.HTTPError as exc:
             body = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(
-                f"RPi5 responded {exc.code}: {body[:500]}"
-            ) from exc
+            raise RuntimeError(f"RPi5 responded {exc.code}: {body[:500]}") from exc
         except urllib.error.URLError as exc:
             raise RuntimeError(f"RPi5 unreachable ({exc.reason}).") from exc
+
+    def push_prediction(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._post("/api/internal/predictions", json.dumps(payload).encode("utf-8"))
+
+    def push_prices_bulk(self, rows: list[dict[str, Any]]) -> int:
+        data = json.dumps({"rows": rows}).encode("utf-8")
+        resp = self._post("/api/internal/prices/bulk", data)
+        return int(resp.get("upserted", len(rows)))
 
 
 # ---------------------------------------------------------------------------
@@ -242,6 +250,90 @@ def _process_asset(
 
 
 # ---------------------------------------------------------------------------
+# Price push
+# ---------------------------------------------------------------------------
+
+_PRICES_BATCH_SIZE = 2_000
+_PRICES_WINDOW_DAYS = 504  # ~2 years, matching risk_adjustment.py default
+
+
+def _push_prices(
+    client: Rpi5Client,
+    financial_db_path: str,
+    universe_catalog: str,
+    window_days: int = _PRICES_WINDOW_DAYS,
+    batch_size: int = _PRICES_BATCH_SIZE,
+) -> tuple[int, int]:
+    """Read raw_prices for the full ticker universe from the local DB and push to RPi5.
+
+    Returns
+    -------
+    (total_rows, failed_batches)
+    """
+    universe = load_ticker_universe(universe_catalog)
+    tickers = list({t.ticker for t in universe})
+    if not tickers:
+        logger.warning("Ticker universe is empty — skipping price push.")
+        return 0, 0
+
+    logger.info("Pushing raw_prices for %d universe tickers (window=%d days)", len(tickers), window_days)
+
+    in_list = ", ".join(f"'{t}'" for t in tickers)
+    try:
+        conn = duckdb.connect(financial_db_path, read_only=True)
+        rows = conn.execute(f"""
+            SELECT ticker,
+                   date::VARCHAR AS date,
+                   open,
+                   high,
+                   low,
+                   close,
+                   volume
+            FROM raw_prices
+            WHERE ticker IN ({in_list})
+              AND date >= CURRENT_DATE - INTERVAL ({window_days} || ' days')
+              AND close IS NOT NULL
+            ORDER BY ticker, date
+        """).fetchall()
+        conn.close()
+    except Exception as exc:
+        logger.exception("Failed to read raw_prices from local DB: %s", exc)
+        return 0, 1
+
+    if not rows:
+        logger.warning("No raw_prices rows found for universe tickers in window.")
+        return 0, 0
+
+    logger.info("Read %d price rows from local DB; pushing in batches of %d", len(rows), batch_size)
+
+    total_pushed = 0
+    failed_batches = 0
+    batches = [rows[i:i + batch_size] for i in range(0, len(rows), batch_size)]
+    for idx, batch in enumerate(batches, 1):
+        payload = [
+            {
+                "ticker": r[0],
+                "date": r[1],
+                "open": r[2],
+                "high": r[3],
+                "low": r[4],
+                "close": r[5],
+                "volume": r[6],
+            }
+            for r in batch
+        ]
+        try:
+            n = client.push_prices_bulk(payload)
+            total_pushed += n
+            logger.info("Prices batch %d/%d — pushed %d rows", idx, len(batches), n)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Prices batch %d/%d failed: %s", idx, len(batches), exc)
+            failed_batches += 1
+
+    return total_pushed, failed_batches
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -294,6 +386,28 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="Run inference but do not push to the RPi5 (print payloads instead).",
+    )
+    p.add_argument(
+        "--skip-prices",
+        action="store_true",
+        help="Skip pushing raw_prices for the ticker universe (prices are pushed by default).",
+    )
+    p.add_argument(
+        "--universe-catalog",
+        default="config/prod/ticker_universe.yaml",
+        help="Path to ticker_universe.yaml used for the price push (default: %(default)s).",
+    )
+    p.add_argument(
+        "--prices-window-days",
+        type=int,
+        default=_PRICES_WINDOW_DAYS,
+        help="Calendar-day lookback window for price rows (default: %(default)s).",
+    )
+    p.add_argument(
+        "--prices-batch-size",
+        type=int,
+        default=_PRICES_BATCH_SIZE,
+        help="Rows per HTTP batch for the price push (default: %(default)s).",
     )
     p.add_argument("--log-level", default="INFO",
                    choices=["DEBUG", "INFO", "WARNING", "ERROR"])
@@ -399,7 +513,27 @@ def main(argv: list[str] | None = None) -> int:
         len(failures), failures,
     )
 
-    return 0 if not failures else 1
+    # --- Price push (universe tickers for risk adjustment) ----------------
+    price_failures = 0
+    if not args.dry_run and not args.skip_prices and client is not None:
+        db_path = args.financial_db or os.environ.get("QUANT_RISK_DB_PATH")
+        if not db_path:
+            logger.warning(
+                "Skipping price push — no DB path (set --financial-db or $QUANT_RISK_DB_PATH)."
+            )
+        else:
+            pushed, price_failures = _push_prices(
+                client=client,
+                financial_db_path=db_path,
+                universe_catalog=args.universe_catalog,
+                window_days=args.prices_window_days,
+                batch_size=args.prices_batch_size,
+            )
+            logger.info("Price push complete — rows=%d failed_batches=%d", pushed, price_failures)
+    elif args.dry_run:
+        logger.info("Dry run — skipping price push.")
+
+    return 0 if not failures and price_failures == 0 else 1
 
 
 if __name__ == "__main__":

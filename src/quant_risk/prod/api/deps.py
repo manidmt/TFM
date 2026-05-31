@@ -119,6 +119,21 @@ def get_research_db(
         conn.close()
 
 
+def get_research_db_rw(
+    config: AppConfig = Depends(get_config),
+) -> Generator[duckdb.DuckDBPyConnection, None, None]:
+    """Yield a read-write DuckDB connection to the research database (financial_data.duckdb).
+
+    Used exclusively by internal write endpoints (off-box price push).
+    Kept open only for the duration of the request to minimise write-lock contention.
+    """
+    conn = duckdb.connect(config.research_db_path, read_only=False)
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
 # ---------------------------------------------------------------------------
 # Authentication dependency
 # ---------------------------------------------------------------------------
