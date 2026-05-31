@@ -5,6 +5,8 @@ Master's thesis — AI & Analytics, UCM / MIOTI, 2026
 
 Predicts daily volatility regimes (Low / Medium / High) for 6 financial assets at 5-day and 20-day horizons, combining econometric models, macro features, and news signals (GDELT GKG). The full pipeline runs in production on a Raspberry Pi 5 with a React web application.
 
+**Live app**: https://risk.manidmt.es
+
 ---
 
 ## Assets
