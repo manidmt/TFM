@@ -97,12 +97,14 @@
   color: var(--line-strong);
 }
 
-a.footer-name {
+a.footer-name,
+a.footer-desc {
   color: inherit;
   text-decoration: none;
 }
 
-a.footer-name:hover {
+a.footer-name:hover,
+a.footer-desc:hover {
   color: var(--text-soft);
   text-decoration: underline;
 }
