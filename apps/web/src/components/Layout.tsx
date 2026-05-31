@@ -67,7 +67,12 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             rel="noopener noreferrer"
           >Manuel Díaz-Meco Terrés</a>
           <span className="footer-sep">·</span>
-          <span className="footer-desc">Master's Thesis in AI &amp; Analytics</span>
+          <a
+            className="footer-desc"
+            href="https://github.com/manidmt/TFM"
+            target="_blank"
+            rel="noopener noreferrer"
+          >Master's Thesis in AI &amp; Analytics</a>
         </div>
       </footer>
       <ChatDrawer />
