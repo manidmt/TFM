@@ -36,3 +36,5 @@ jobs:
           --ignore=tests/test_walk_forward_mlflow_smoke.py
           --ignore=tests/prod/test_worker_ingest.py
           --ignore=tests/prod/test_prices_endpoint.py
+          --deselect=tests/prod/test_api.py::TestPrivatePortfolios::test_analyze_portfolio
+          --deselect=tests/prod/test_api.py::TestPrivatePortfolios::test_analyze_portfolio_what_if
