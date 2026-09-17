@@ -42,6 +42,7 @@ pytorch-tabnet = "^4.1.0"
 tabpfn = "^6.4.1"
 optuna = "^4.7.0"
 python-multipart = ">=0.0.9"
+openai = "^1.30.0"
 
 [tool.poetry.group.dev.dependencies]
 jupyterlab = "^4.1.0"

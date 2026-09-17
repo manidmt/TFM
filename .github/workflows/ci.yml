@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Backend (pytest, unit tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Poetry
+        run: pipx install poetry
+      - name: Install dependencies
+        run: poetry install --no-interaction
+      # The tests below require a locally-built data/db/financial_data.duckdb
+      # (populated by the ingestion pipeline from live market data) and are
+      # not run in CI to keep it fast and independent of external data/network.
+      - name: Run unit tests
+        run: >
+          poetry run pytest -q
+          --ignore=tests/test_dataset.py
+          --ignore=tests/test_ingest.py
+          --ignore=tests/test_labels.py
+          --ignore=tests/test_tabular_integration.py
+          --ignore=tests/test_tabular_models_smoke.py
+          --ignore=tests/test_baseline_models_smoke.py
+          --ignore=tests/test_build_features.py
+          --ignore=tests/test_chain_sarimax_garch.py
+          --ignore=tests/test_walk_forward_mlflow_smoke.py
+          --ignore=tests/prod/test_worker_ingest.py
+          --ignore=tests/prod/test_prices_endpoint.py
