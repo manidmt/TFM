@@ -1,5 +1,7 @@
 # quant-risk-tfm
 
+[![CI](https://github.com/manidmt/TFM/actions/workflows/ci.yml/badge.svg)](https://github.com/manidmt/TFM/actions/workflows/ci.yml)
+
 Master's thesis — AI & Analytics, UCM / MIOTI, 2026  
 **Volatility Regime Prediction for Financial Assets using Econometric-ML Chains**
 
@@ -189,6 +191,10 @@ poetry run pytest -q                                         # full suite
 poetry run pytest tests/test_build_features_with_gkg.py -v  # single file
 poetry run pytest --cov=quant_risk tests/                    # with coverage
 ```
+
+CI (badge above) runs the subset of the suite that doesn't require a locally-built
+`data/db/financial_data.duckdb` — the rest are integration tests over real ingested
+market data, run locally with the full command above.
 
 Test coverage spans: ingestion, feature building, label construction, econometric models, tabular models, calibration/gating, walk-forward smoke, production API, bundle registry, portfolio analysis, auth.
 

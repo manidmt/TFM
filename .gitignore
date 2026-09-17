@@ -61,17 +61,17 @@ optuna_studies*.db
 apps/web/node_modules/
 apps/web/dist/
 
-# Claude Code tooling
+# Claude Code tooling (dev-only, not part of the public portfolio piece)
 .agents/
 skills-lock.json
 .playwright/
 .playwright-cli/
 .superpowers/
-.claude/settings.local.json
+.claude/
+CLAUDE.md
 
-# Engram (memory config committed, local DB not)
-.engram/engram.db
-.engram/*.bak
+# Engram (dev-only memory tooling)
+.engram/
 
 # Reports
 /reports/
